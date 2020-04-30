@@ -16,15 +16,23 @@
 
 1. Start server in one terminal (binds to port 3308)
 
-    $ ./tls13_ping_pong_server
+      $ ./tls13_ping_pong_server
 
 2. run the client in another terminal
 
-    $ ./tls13_ping_pong_client
+      $ ./tls13_ping_pong_client
 
 ## Tracing packets
 
 Start server as before, but add tcpdump:
+
+    $ sudo tcpdump -w tls13.pcap -i lo 'port 3308'
+    $ ./tls13_ping_pong_server
+    $ wireshark tls13.pcap
+
+### Let wireshark decrypt the TLS packets automatically
+
+Wireshark 3.x.
 
     $ sudo tcpdump -w tls13.pcap -i lo 'port 3308'
     $ SSLKEYLOGFILE=keys.txt ./tls13_ping_pong_client
