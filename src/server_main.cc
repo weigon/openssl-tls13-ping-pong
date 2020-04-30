@@ -170,6 +170,8 @@ int main() {
       return EXIT_FAILURE;
     }
 
+    std::cout << "s <- c: // new connection" << std::endl;
+
     {
       int on = 1;
       setsockopt(client_sock.native_handle(), SOL_TCP, TCP_NODELAY, &on,
@@ -181,42 +183,76 @@ int main() {
                                                      &SSL_free);
     SSL_set_fd(ssl.get(), client_sock.native_handle());
 
-    // accept the TLS connection
-    auto ssl_res = SSL_accept(ssl.get());
-    if (ssl_res != 1) {
-      switch (SSL_get_error(ssl.get(), ssl_res)) {
-        case SSL_ERROR_NONE:
-          std::cerr << "none" << std::endl;
+    std::string transfer_buf;
+    transfer_buf.resize(128);
+    size_t transfered{};
+    do {
+      {
+        auto ssl_res = SSL_read_early_data(ssl.get(), &transfer_buf.front(),
+                                           transfer_buf.size(), &transfered);
+        if (ssl_res == SSL_READ_EARLY_DATA_ERROR) {
+          switch (SSL_get_error(ssl.get(), ssl_res)) {
+            case SSL_ERROR_NONE:
+              std::cerr << "none" << std::endl;
+              break;
+            case SSL_ERROR_SSL: {
+              std::array<char, 120> errbuf;
+              std::cerr << __LINE__ << ": ssl: "
+                        << ERR_error_string(ERR_get_error(), errbuf.data())
+                        << std::endl;
+              break;
+            }
+            default:
+              std::cerr << __LINE__ << ": ???" << std::endl;
+              break;
+          }
           break;
-        case SSL_ERROR_SYSCALL:
-          std::cerr << last_error_code().message() << std::endl;
+        } else if (ssl_res == SSL_READ_EARLY_DATA_FINISH) {
+          transfer_buf.resize(transfered);
+          if (transfered > 0) {
+            std::cout << "s <- c: " << transfer_buf << std::endl;
+          }
           break;
-        case SSL_ERROR_SSL: {
-          std::array<char, 120> errbuf;
-          std::cerr << "ssl: "
-                    << ERR_error_string(ERR_get_error(), errbuf.data())
-                    << std::endl;
-          break;
+        } else if (ssl_res == SSL_READ_EARLY_DATA_SUCCESS) {
+          transfer_buf.resize(transfered);
+          std::cout << "s <- c: " << transfer_buf << std::endl;
         }
       }
+    } while (true);
 
-      // drop this connection and accept the next one
-      continue;
+    {
+      // accept the TLS connection
+      auto ssl_res = SSL_accept(ssl.get());
+      if (ssl_res != 1) {
+        switch (SSL_get_error(ssl.get(), ssl_res)) {
+          case SSL_ERROR_NONE:
+            std::cerr << "none" << std::endl;
+            break;
+          case SSL_ERROR_SYSCALL:
+            std::cerr << last_error_code().message() << std::endl;
+            break;
+          case SSL_ERROR_SSL: {
+            std::array<char, 120> errbuf;
+            std::cerr << "ssl: "
+                      << ERR_error_string(ERR_get_error(), errbuf.data())
+                      << std::endl;
+            break;
+          }
+        }
+
+        // drop this connection and accept the next one
+        continue;
+      }
+
+      std::cout << "s -> c: // established" << std::endl;
     }
 
-    // NOT_SENT: 0
-    // REJECTED: 1
-    // ACCEPTED: 2
-    std::cerr << __LINE__ << ": " << SSL_get_early_data_status(ssl.get())
-              << std::endl;
-
-    std::string read_buf;
-    read_buf.resize(128);
-    size_t transfered{};
-    if (SSL_get_early_data_status(ssl.get()) != SSL_EARLY_DATA_NOT_SENT) {
-      auto ssl_err = SSL_read_early_data(ssl.get(), &read_buf.front(),
-                                         read_buf.size(), &transfered);
-      if (ssl_res == SSL_READ_EARLY_DATA_ERROR) {
+    // only read data, if no early data was accepted.
+    if (SSL_get_early_data_status(ssl.get()) != SSL_EARLY_DATA_ACCEPTED) {
+      transfer_buf.resize(128);
+      auto ssl_res = SSL_read_ex(ssl.get(), &transfer_buf.front(),
+                                 transfer_buf.size(), &transfered);
+      if (ssl_res == 0) {
         switch (SSL_get_error(ssl.get(), ssl_res)) {
           case SSL_ERROR_NONE:
             std::cerr << "none" << std::endl;
@@ -229,22 +265,54 @@ int main() {
             break;
           }
         }
-      } else if (ssl_res == SSL_READ_EARLY_DATA_FINISH) {
-        read_buf.resize(transfered);
-        std::cerr << "read-early: " << read_buf << std::endl;
-      } else if (ssl_res == SSL_READ_EARLY_DATA_SUCCESS) {
-        read_buf.resize(transfered);
-        std::cerr << "read-early (need more): " << read_buf << std::endl;
+      } else if (ssl_res == 1) {
+        transfer_buf.resize(transfered);
+        std::cout << "s <- c: " << transfer_buf << std::endl;
       }
     }
 
-    SSL_shutdown(ssl.get());
+    transfer_buf.assign("PONG");
+    SSL_write(ssl.get(), transfer_buf.data(), transfer_buf.size());
+
+    std::cout << "s -> c: " << transfer_buf << std::endl;
+    {
+      auto ssl_res = SSL_shutdown(ssl.get());
+      if (ssl_res == 0) {
+        // not finished yet
+        //
+        // but we'll close the connection anyway.
+        std::cout << "s -> c: shutdown in-progress" << std::endl;
+      } else if (ssl_res == 1) {
+        // finished
+        std::cout << "s -> c: shutdown finished" << std::endl;
+      } else if (ssl_res == -1) {
+        std::array<char, 120> errbuf;
+        std::cerr << __LINE__ << ": ssl: "
+                  << ERR_error_string(ERR_get_error(), errbuf.data())
+                  << std::endl;
+      }
+    }
 
     shutdown(sock.native_handle(), SHUT_WR);
 
-    // wait for the close from the other side
-    read_buf.resize(128);
-    read(sock.native_handle(), &read_buf.front(), read_buf.size());
+    {
+      auto ssl_res = SSL_shutdown(ssl.get());
+      if (ssl_res == 0) {
+        // not finished yet
+        //
+        // but we'll close the connection anyway.
+        std::cout << "s -> c: shutdown in-progress" << std::endl;
+      } else if (ssl_res == 1) {
+        // finished
+        std::cout << "s -> c: shutdown finished" << std::endl;
+      } else if (ssl_res == -1) {
+        std::array<char, 120> errbuf;
+        std::cerr << __LINE__ << ": ssl: "
+                  << ERR_error_string(ERR_get_error(), errbuf.data())
+                  << std::endl;
+      }
+    }
+    std::cout << "s -x c: // closed" << std::endl;
   } while (!want_shutdown);
 
   return 0;

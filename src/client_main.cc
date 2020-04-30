@@ -80,10 +80,11 @@ std::error_code last_error_code() { return {errno, std::generic_category()}; }
  *
  * @param with_fast_open if TCP Fast Open shall be enabled.
  * @param with_session_resumption if TLS session resumption should be resumed.
+ * @param early_data send data as part of the resmed session
  * @returns a std::error_code with the last error (or 0 on success)
  */
 std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
-                       bool with_session_resumption) {
+                       bool with_session_resumption, bool early_data) {
   auto ssl = std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx), &SSL_free);
 
   addrinfo *ai_raw{};
@@ -125,8 +126,9 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
   }
   SSL_set_connect_state(ssl.get());
 
-  std::array<char, 5> transfer_buf = {"PING"};
-  if (SSL_get0_session(ssl.get()) != nullptr &&
+  std::string transfer_buf("PING");
+
+  if (early_data && SSL_get0_session(ssl.get()) != nullptr &&
       SSL_SESSION_get_max_early_data(SSL_get0_session(ssl.get())) > 0) {
     size_t written;
     auto ssl_res = SSL_write_early_data(ssl.get(), transfer_buf.data(),
@@ -134,7 +136,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
     if (ssl_res != 1) {
       switch (SSL_get_error(ssl.get(), ssl_res)) {
         case SSL_ERROR_NONE:
-          std::cerr << "none" << std::endl;
+          std::cerr << __LINE__ << ": none" << std::endl;
           break;
         case SSL_ERROR_SYSCALL:
           return last_error_code();
@@ -147,7 +149,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
         }
       }
     } else {
-      std::cerr << __LINE__ << ": PING (early)" << std::endl;
+      std::cerr << "c -> s: " << transfer_buf.data() << std::endl;
     }
   }
 
@@ -156,7 +158,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
     if (ssl_res != 1) {
       switch (SSL_get_error(ssl.get(), ssl_res)) {
         case SSL_ERROR_NONE:
-          std::cerr << "none" << std::endl;
+          std::cerr << __LINE__ << ": none" << std::endl;
           break;
         case SSL_ERROR_SSL: {
           std::array<char, 120> errbuf;
@@ -173,11 +175,10 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
           break;
       }
     } else if (ssl_res > 0) {
-      std::cerr << __LINE__ << ": connected" << std::endl;
+      std::cout << "c -> s: "
+                << "// established" << std::endl;
     }
   }
-  std::cerr << __LINE__ << ": " << SSL_get_early_data_status(ssl.get())
-            << std::endl;
 
   if (SSL_get_early_data_status(ssl.get()) != SSL_EARLY_DATA_ACCEPTED) {
     auto ssl_res =
@@ -185,7 +186,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
     if (ssl_res < 0) {
       switch (SSL_get_error(ssl.get(), ssl_res)) {
         case SSL_ERROR_NONE:
-          std::cerr << "none" << std::endl;
+          std::cerr << __LINE__ << ": none" << std::endl;
           break;
         case SSL_ERROR_SSL: {
           std::array<char, 120> errbuf;
@@ -202,17 +203,20 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
           break;
       }
     } else if (ssl_res > 0) {
-      std::cerr << __LINE__ << ": PING" << std::endl;
+      std::cout << "c -> s: " << transfer_buf.data() << std::endl;
     }
   }
 
   {
-    std::array<char, 128> read_buf;
-    auto ssl_res = SSL_read(ssl.get(), read_buf.data(), read_buf.size());
-    if (ssl_res != 1) {
+    std::string transfer_buf;
+    transfer_buf.resize(128);
+    size_t transfered;
+    auto ssl_res = SSL_read_ex(ssl.get(), &transfer_buf.front(),
+                               transfer_buf.size(), &transfered);
+    if (ssl_res <= 0) {
       switch (SSL_get_error(ssl.get(), ssl_res)) {
         case SSL_ERROR_NONE:
-          std::cerr << "none" << std::endl;
+          std::cerr << __LINE__ << ": none" << std::endl;
           break;
         case SSL_ERROR_SSL: {
           std::array<char, 120> errbuf;
@@ -222,22 +226,52 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
           break;
         }
       }
-    } else if (ssl_res > 0) {
-      std::cerr << "read" << std::endl;
+    } else {
+      transfer_buf.resize(transfered);
+      std::cerr << "c <- s: " << transfer_buf.data() << std::endl;
     }
   }
 
-  // shutdown the SSL session to
-  SSL_shutdown(ssl.get());
+  {
+    auto ssl_res = SSL_shutdown(ssl.get());
+    if (ssl_res == 0) {
+      // not finished yet
+      //
+      // but we'll close the connection anyway.
+      std::cout << "c -> s: shutdown in-progress" << std::endl;
+    } else if (ssl_res == 1) {
+      // finished
+      std::cout << "c -> s: shutdown finished" << std::endl;
+    } else if (ssl_res == -1) {
+      std::array<char, 120> errbuf;
+      std::cerr << __LINE__
+                << ": ssl: " << ERR_error_string(ERR_get_error(), errbuf.data())
+                << std::endl;
+    }
+  }
 
+  std::cout << "c -x s: // shutdown" << std::endl;
   shutdown(sock.native_handle(), SHUT_WR);
 
   {
-    std::array<char, 128> read_buf;
-    // wait for the close from the other side
-    read(sock.native_handle(), read_buf.data(), read_buf.size());
+    auto ssl_res = SSL_shutdown(ssl.get());
+    if (ssl_res == 0) {
+      // not finished yet
+      //
+      // but we'll close the connection anyway.
+      std::cout << "c -> s: shutdown in-progress" << std::endl;
+    } else if (ssl_res == 1) {
+      // finished
+      std::cout << "c -> s: shutdown finished" << std::endl;
+    } else if (ssl_res == -1) {
+      std::array<char, 120> errbuf;
+      std::cerr << __LINE__
+                << ": ssl: " << ERR_error_string(ERR_get_error(), errbuf.data())
+                << std::endl;
+    }
   }
 
+  std::cout << "c -x s: // closed" << std::endl;
   return {};
 }
 
@@ -279,29 +313,43 @@ int main() {
         }
       });
 
-  // 1st round without TCP Fast Open, no session resumption
-  auto ec = do_one(ssl_ctx.get(), false, false);
+  std::cout << "// TLS1.3 full handshake" << std::endl;
+  auto ec = do_one(ssl_ctx.get(), false, false, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
-  // 2nd round with TCP Fast Open.
-  ec = do_one(ssl_ctx.get(), false, true);
+  std::cout << "// TLS1.3 resumption" << std::endl;
+  ec = do_one(ssl_ctx.get(), false, true, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
-  // 3rd round with TCP Fast Open, without session resumption
-  ec = do_one(ssl_ctx.get(), true, false);
+  std::cout << "// TLS1.3 0-RTT" << std::endl;
+  ec = do_one(ssl_ctx.get(), false, true, true);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
-  // 4th round with TCP Fast Open, and session resumption
-  ec = do_one(ssl_ctx.get(), true, true);
+  std::cout << "// TCP-Fast Open, TLS1.3 full handshake" << std::endl;
+  ec = do_one(ssl_ctx.get(), true, false, false);
+  if (ec) {
+    std::cerr << ec.message() << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  std::cout << "// TCP-Fast Open, TLS1.3 resumption" << std::endl;
+  ec = do_one(ssl_ctx.get(), true, true, false);
+  if (ec) {
+    std::cerr << ec.message() << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  std::cout << "// TCP-Fast Open, TLS1.3 0-RTT" << std::endl;
+  ec = do_one(ssl_ctx.get(), true, true, true);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
