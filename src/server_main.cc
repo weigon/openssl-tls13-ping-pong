@@ -67,9 +67,14 @@ volatile int want_shutdown{0};
 
 static void signal_handler(int sig) { want_shutdown = 1; }
 
-int main() {
+int main(int argc, char **argv) {
   // don't signal SIGPIPE on write() to a closed connection
   signal(SIGPIPE, SIG_IGN);
+
+  const char default_service[] = "3308";
+
+  const char *hostname = argc < 2 ? nullptr : argv[1];
+  const char *service = argc < 3 ? default_service : argv[2];
 
   // allow the interrupt the blocking accept() call with SIGINT, SIGTERM
   struct sigaction action {};
@@ -129,8 +134,8 @@ int main() {
   addrinfo *ai_raw{};
   addrinfo hints{};
   hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV | AI_PASSIVE;
-  auto ai_res = getaddrinfo("127.0.0.1", "3308", nullptr, &ai_raw);
+  hints.ai_flags = AI_PASSIVE;
+  auto ai_res = getaddrinfo(hostname, service, nullptr, &ai_raw);
   if (ai_res != 0) {
     std::cerr << last_error_code().message() << std::endl;
     return EXIT_FAILURE;

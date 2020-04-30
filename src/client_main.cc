@@ -83,15 +83,15 @@ std::error_code last_error_code() { return {errno, std::generic_category()}; }
  * @param early_data send data as part of the resmed session
  * @returns a std::error_code with the last error (or 0 on success)
  */
-std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
+std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
+                       const char *service, bool with_fast_open,
                        bool with_session_resumption, bool early_data) {
   auto ssl = std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx), &SSL_free);
 
   addrinfo *ai_raw{};
   addrinfo hints{};
   hints.ai_socktype = SOCK_STREAM;
-  hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
-  auto ai_res = getaddrinfo("127.0.0.1", "3308", nullptr, &ai_raw);
+  auto ai_res = getaddrinfo(hostname, service, nullptr, &ai_raw);
   if (ai_res != 0) {
     return last_error_code();
   }
@@ -309,8 +309,14 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
   return {};
 }
 
-int main() {
+int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
+
+  const char default_hostname[] = "127.0.0.1";
+  const char default_service[] = "3308";
+
+  const char *hostname = argc < 2 ? default_hostname : argv[1];
+  const char *service = argc < 3 ? default_service : argv[2];
 
   // build SSL context
   auto ssl_ctx = std::unique_ptr<SSL_CTX, void (*)(SSL_CTX *)>(
@@ -348,42 +354,42 @@ int main() {
       });
 
   std::cout << "// TLS1.3 full handshake" << std::endl;
-  auto ec = do_one(ssl_ctx.get(), false, false, false);
+  auto ec = do_one(ssl_ctx.get(), hostname, service, false, false, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
   std::cout << "// TLS1.3 resumption" << std::endl;
-  ec = do_one(ssl_ctx.get(), false, true, false);
+  ec = do_one(ssl_ctx.get(), hostname, service, false, true, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
   std::cout << "// TLS1.3 0-RTT" << std::endl;
-  ec = do_one(ssl_ctx.get(), false, true, true);
+  ec = do_one(ssl_ctx.get(), hostname, service, false, true, true);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
   std::cout << "// TCP-Fast Open, TLS1.3 full handshake" << std::endl;
-  ec = do_one(ssl_ctx.get(), true, false, false);
+  ec = do_one(ssl_ctx.get(), hostname, service, true, false, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
   std::cout << "// TCP-Fast Open, TLS1.3 resumption" << std::endl;
-  ec = do_one(ssl_ctx.get(), true, true, false);
+  ec = do_one(ssl_ctx.get(), hostname, service, true, true, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
   std::cout << "// TCP-Fast Open, TLS1.3 0-RTT" << std::endl;
-  ec = do_one(ssl_ctx.get(), true, true, true);
+  ec = do_one(ssl_ctx.get(), hostname, service, true, true, true);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;

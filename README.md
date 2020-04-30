@@ -173,20 +173,20 @@ TCP Fast Open and TLS 1.3 can be combined
 
 ### running
 
-1. Start server in one terminal (binds to port 3308)
+1. Start server in one terminal
 
-       $ ./src/tls13_ping_pong_server
+       $ ./src/tls13_ping_pong_server 127.0.0.1 3308
 
 2. run the client in another terminal
 
-       $ ./src/tls13_ping_pong_client
+       $ ./src/tls13_ping_pong_client 127.0.0.1 3308
 
 ### Tracing packets
 
 Start server as before, but add tcpdump:
 
     $ sudo tcpdump -w tls13.pcap -i lo 'port 3308'
-    $ ./src/tls13_ping_pong_server
+    $ ./src/tls13_ping_pong_client 127.0.0.1 3308
     $ wireshark tls13.pcap
 
 #### Let wireshark decrypt the TLS packets automatically
@@ -194,7 +194,7 @@ Start server as before, but add tcpdump:
 Wireshark 3.x.
 
     $ sudo tcpdump -w tls13.pcap -i lo 'port 3308'
-    $ SSLKEYLOGFILE=keys.txt ./src/tls13_ping_pong_client
+    $ SSLKEYLOGFILE=keys.txt ./src/tls13_ping_pong_client 127.0.0.1 3308
     $ editcap --inject-secrets tls,keys.txt tls13.pcap tls13-with-keys-dsb.pcapng
     $ wireshark tls13-with-keys-dsb.pcapng
 
