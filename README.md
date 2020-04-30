@@ -161,7 +161,10 @@ TCP Fast Open and TLS 1.3 can be combined
 - cmake 3.4 or later
 - C++14 capable compiler
 - Openssl 1.1.1
-- Linux 4.11 or later
+- Operating Systems
+  - Linux 4.11 or later
+  - FreeBSD 12 or later
+  - MacOSX 10.11 or later
 
 ### building
 

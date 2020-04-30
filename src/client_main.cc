@@ -43,7 +43,7 @@
 #error at least openssl 1.1.1 is required.
 #endif
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
 // we are good to go.
 #else
 #error unsupported OS
@@ -90,7 +90,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
   addrinfo *ai_raw{};
   addrinfo hints{};
   hints.ai_socktype = SOCK_STREAM;
-  hints.ai_family = AI_NUMERICHOST | AI_NUMERICSERV;
+  hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV;
   auto ai_res = getaddrinfo("127.0.0.1", "3308", nullptr, &ai_raw);
   if (ai_res != 0) {
     return last_error_code();
@@ -105,19 +105,53 @@ std::error_code do_one(SSL_CTX *ssl_ctx, bool with_fast_open,
     return last_error_code();
   }
 
-  if (with_fast_open) {
-    int on{1};
-    setsockopt(sock.native_handle(), SOL_TCP, TCP_FASTOPEN_CONNECT, &on,
-               sizeof on);
-  }
-
   {
     int on = 1;
-    setsockopt(sock.native_handle(), SOL_TCP, TCP_NODELAY, &on, sizeof on);
+    if (0 != setsockopt(sock.native_handle(), IPPROTO_TCP, TCP_NODELAY, &on,
+                        sizeof on)) {
+      std::cerr << __LINE__ << ": setsockopt(" << sock.native_handle()
+                << ", IPPROTO_TCP, TCP_NODELAY): "
+                << last_error_code().message() << std::endl;
+      return last_error_code();
+    }
   }
 
-  if (0 != connect(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
-    return last_error_code();
+  if (with_fast_open) {
+#if defined(__FreeBSD__)
+    int on{1};
+    if (0 != setsockopt(sock.native_handle(), IPPROTO_TCP, TCP_FASTOPEN, &on,
+                        sizeof on)) {
+      return last_error_code();
+    }
+
+    if (0 != connect(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
+      return last_error_code();
+    }
+#elif defined(__linux__)
+    int on{1};
+    if (0 != setsockopt(sock.native_handle(), SOL_TCP, TCP_FASTOPEN_CONNECT,
+                        &on, sizeof on)) {
+      return last_error_code();
+    }
+    if (0 != connect(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
+      return last_error_code();
+    }
+#elif defined(__APPLE__)
+    sa_endpoints_t endpoints{};
+
+    endpoints.sae_dstaddr = ai->ai_addr;
+    endpoints.sae_dstaddrlen = ai->ai_addrlen;
+
+    if (0 != connectx(sock.native_handle(), &endpoints, SAE_ASSOCID_ANY,
+                      CONNECT_RESUME_ON_READ_WRITE | CONNECT_DATA_IDEMPOTENT,
+                      NULL, 0, NULL, NULL)) {
+      return last_error_code();
+    }
+#endif
+  } else {
+    if (0 != connect(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
+      return last_error_code();
+    }
   }
 
   SSL_set_fd(ssl.get(), sock.native_handle());

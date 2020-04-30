@@ -21,12 +21,14 @@
  *
  * SPDX-License-Identifier: MIT
  */
+#include <array>
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <system_error>
 
+#include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -54,6 +56,10 @@
 // 1
 // # enable client and server
 // $ echo "3" | sudo tee /proc/sys/net/ipv4/tcp_fastopen
+//
+// On FreeBSD:
+//
+// $ sysctl net.inet.tcp.fastopen.server_enable=1
 
 std::error_code last_error_code() { return {errno, std::generic_category()}; }
 
@@ -123,7 +129,7 @@ int main() {
   addrinfo *ai_raw{};
   addrinfo hints{};
   hints.ai_socktype = SOCK_STREAM;
-  hints.ai_family = AI_NUMERICHOST | AI_NUMERICSERV;
+  hints.ai_flags = AI_NUMERICHOST | AI_NUMERICSERV | AI_PASSIVE;
   auto ai_res = getaddrinfo("127.0.0.1", "3308", nullptr, &ai_raw);
   if (ai_res != 0) {
     std::cerr << last_error_code().message() << std::endl;
@@ -142,21 +148,42 @@ int main() {
 
   {
     int on{1};
-    setsockopt(sock.native_handle(), SOL_TCP, TCP_FASTOPEN, &on, sizeof on);
-  }
-
-  {
-    int on = 1;
-    setsockopt(sock.native_handle(), SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
+#if defined(__linux__)
+    if (0 != setsockopt(sock.native_handle(), SOL_TCP, TCP_FASTOPEN, &on,
+                        sizeof on)) {
+      std::cerr << last_error_code().message() << std::endl;
+      return EXIT_FAILURE;
+    }
+#elif defined(__FreeBSD__) || defined(__APPLE__)
+    if (0 != setsockopt(sock.native_handle(), IPPROTO_TCP, TCP_FASTOPEN, &on,
+                        sizeof on)) {
+      auto ec = last_error_code();
+      std::cerr << __LINE__ << ": enable TCP FastOpen(): " << ec.message()
+                << std::endl;
+      // may fail if not enabled by the system.
+      if (ec != make_error_code(std::errc::operation_not_permitted)) {
+        return EXIT_FAILURE;
+      }
+    }
+#endif
   }
 
   if (0 != bind(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
-    std::cerr << last_error_code().message() << std::endl;
+    std::cerr << __LINE__ << ": " << last_error_code().message() << std::endl;
     return EXIT_FAILURE;
   }
-  if (0 != listen(sock.native_handle(), 128)) {
-    std::cerr << last_error_code().message() << std::endl;
+  if (0 != listen(sock.native_handle(), 32)) {
+    std::cerr << __LINE__ << ": " << last_error_code().message() << std::endl;
     return EXIT_FAILURE;
+  }
+
+  {
+    int on{1};
+    if (0 != setsockopt(sock.native_handle(), SOL_SOCKET, SO_REUSEADDR, &on,
+                        sizeof on)) {
+      std::cerr << last_error_code().message() << std::endl;
+      return EXIT_FAILURE;
+    }
   }
 
   // socket is setup, ready to accept connections.
@@ -174,8 +201,11 @@ int main() {
 
     {
       int on = 1;
-      setsockopt(client_sock.native_handle(), SOL_TCP, TCP_NODELAY, &on,
-                 sizeof on);
+      if (0 != setsockopt(client_sock.native_handle(), IPPROTO_TCP, TCP_NODELAY,
+                          &on, sizeof on)) {
+        std::cerr << __LINE__ << ": " << last_error_code().message()
+                  << std::endl;
+      }
     }
 
     // create a SSL handle and assign it the socket-fd
