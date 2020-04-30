@@ -22,17 +22,14 @@ send the application over TCP in one packet.
 ### Results
 
 | Scenario                               | PING | PONG |
-| ====================================== | ====:| ====:|
+| -------------------------------------- | ----:| ----:|
 | TLS 1.3 full handshake                 | 49ms | 59ms |
 | TLS 1.3 0-RTT                          | 20ms | 52ms |
 | TLS 1.3 full handshake + TCP Fast Open | 29ms | 39ms |
 | TLS 1.3 0-RTT + TCP Fast Open          |  0ms | 32ms |
 
-PING
-:  duration until PING message is sent to the server
-
-PONG
-:  duration until PONG message is received from the server
+* PING: duration until PING message is sent to the server
+* PONG: duration until PONG message is received from the server
 
 ## TCP handshake
 
@@ -40,10 +37,10 @@ PONG
 
 The normal TCP handshake is:
 
-    0.000 c->s: SYN
-    0.010 s->c: SYN+ACK
-    0.020 c->s: ACK
-    0.020 c->s: Client Data
+    0.000 c -> s: SYN
+    0.010 c <- s: SYN+ACK
+    0.020 c -> s: ACK
+    0.020 c -> s: Client Data
     ...
 
 ### TCP Fast Open
@@ -56,9 +53,9 @@ If
 
 it can send data in the first packet of the TCP handshake:
 
-    0.000 c->s: SYN + Client Data
-    0.010 s->c: SYN+ACK
-    0.020 c->s: ACK
+    0.000 c -> s: SYN + Client Data
+    0.010 c <- s: SYN+ACK
+    0.020 c -> s: ACK
     ...
 
 which allows the server to send a response earlier.
@@ -93,7 +90,7 @@ TLS 1.3 supports a abbreveated handshake if
 - client connected to the server previously and
 - the previous connection was shutdown properly
 
-With session resumption, the `Server Hello` is way faster.
+With session resumption, the `Server Hello` is about 7-8ms faster.
 
 ...
 
@@ -175,11 +172,11 @@ TCP Fast Open and TLS 1.3 can be combined
 
 1. Start server in one terminal (binds to port 3308)
 
-      $ ./src/tls13_ping_pong_server
+       $ ./src/tls13_ping_pong_server
 
 2. run the client in another terminal
 
-      $ ./src/tls13_ping_pong_client
+       $ ./src/tls13_ping_pong_client
 
 ### Tracing packets
 
