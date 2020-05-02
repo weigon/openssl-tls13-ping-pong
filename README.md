@@ -12,7 +12,7 @@ send the application over TCP in one packet.
 
 ## TL;DR;
 
-### Flow
+### A simple use case
 
 1. establish connection
 2. send PING
@@ -31,36 +31,13 @@ send the application over TCP in one packet.
 * PING: duration until PING message is sent to the server
 * PONG: duration until PONG message is received from the server
 
-## TCP handshake
+## TLS Connection
 
-### 3-way TCP handshake
-
-The normal TCP handshake is:
-
-    0.000 c -> s: SYN
-    0.010 c <- s: SYN+ACK
-    0.020 c -> s: ACK
-    0.020 c -> s: Client Data
-    ...
-
-### TCP Fast Open
-
-If
-
-- TCP Fast Open is supported and
-- enabled on both client and server and
-- client established a connected to the server before
-
-it can send data in the first packet of the TCP handshake:
-
-    0.000 c -> s: SYN + Client Data
-    0.010 c <- s: SYN+ACK
-    0.020 c -> s: ACK
-    ...
-
-which allows the server to send a response earlier.
-
-## TLS Handshake
+- TCP handshake
+- TLS handshake
+- Application data exchange
+- TLS connection shutdown
+- TCP connection shutdown
 
 ### TLS 1.3 - Full Handshake
 
@@ -81,7 +58,7 @@ A full TLS handshake takes about 8ms:
     0.069 c -> s: TCP FIN
     0.079 c <- s: TCP FIN
 
-(over the loopback interface, 10ms extra latency).
+- a full `Server Hello` takes about 8ms longer than the normal network latency.
 
 ### TLS 1.3 - Session Resumption
 
@@ -116,7 +93,24 @@ The packet flow:
     0.062 c -> s: TCP FIN
     0.072 c <- s: TCP FIN
 
-## TLS 1.3 Full Handshake + TCP Fast Open
+## TCP Fast Open
+
+If
+
+- TCP Fast Open is supported by the OS and
+- enabled on both client and server and
+- client established a connected to the server before
+
+it can send data in the first packet of the TCP handshake:
+
+    0.000 c -> s: SYN + Client Data
+    0.010 c <- s: SYN+ACK
+    0.020 c -> s: ACK
+    ...
+
+which allows the server to send a response earlier.
+
+### TLS 1.3 Full Handshake + TCP Fast Open
 
 TCP Fast Open and TLS 1.3 can be combined
 
@@ -134,11 +128,11 @@ TCP Fast Open and TLS 1.3 can be combined
     0.049 c -> s: TCP FIN
     0.059 c <- s: TCP FIN
 
-## TLS 1.3 Session Resumption + TCP Fast Open
+### TLS 1.3 Session Resumption + TCP Fast Open
 
 ...
 
-## TLS 1.3 0-RTT + TCP Fast Open
+### TLS 1.3 0-RTT + TCP Fast Open
 
 TCP Fast Open and TLS 1.3 can be combined
 
@@ -154,9 +148,79 @@ TCP Fast Open and TLS 1.3 can be combined
     0.042 c -> s: TCP FIN
     0.052 c <- s: TCP FIN
 
-## Examples
+# API usage
 
-### Build Requirements
+OpenSSL 1.1.1 added the nessary APIs to use TLS 1.3 session resumption
+and 0-RTT.
+
+## TLS Session Resumption
+
+The client MUST 
+
+```c++
+std::unique_ptr<SSL_SESSION, void (*)(SSL_SESSION *)> last_session(
+    nullptr, &SSL_SESSION_free);
+
+static int new_session_cb(SSL *s, SSL_SESSION *sess) {
+  // store session in cache.
+  last_session.reset(sess);
+
+  return 1;
+}
+
+  //...
+  // enable the session cache to allow session resumption
+  SSL_CTX_set_session_cache_mode(
+    ssl_ctx, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL);
+  SSL_CTX_sess_set_new_cb(ssl_ctx, new_session_cb);
+  // ...
+```
+
+The `new_session_cb` will be called whenever the server sent a new
+session (e.h. `New Session Ticket`). It can be used on the next SSL
+connection to the same server.
+
+```c++
+  if (last_session) {
+    SSL_set_session(ssl.get(), last_session.release());
+  }
+```
+
+## TLS 1.3 0-RTT
+
+If the current SSL connection has a resumed session and the server
+announced it supports `early data`, the client can send data as part
+of the handshake by using `SSL_write_early_data()` before `SSL_connect()`.
+
+```c++
+  if (SSL_get0_session(ssl)) != nullptr &&
+      SSL_SESSION_get_max_early_data(SSL_get0_session(ssl)) > 0) {
+    size_t written;
+    auto ssl_res = SSL_write_early_data(ssl, transfer_buf.data(),
+                                        transfer_buf.size(), &written);
+    if (ssl_res != 1) {
+      // handle error
+    } else {
+      // success
+    }
+  }
+
+  // SSL_connect() ...
+```
+
+The TLS connection must properly signal a shutdown to make the session
+resumable:
+
+```c++
+  // ...
+
+  SSL_shutdown(ssl);
+```
+
+
+# Examples
+
+## Build Requirements
 
 - cmake 3.4 or later
 - C++14 capable compiler
@@ -166,12 +230,12 @@ TCP Fast Open and TLS 1.3 can be combined
   - FreeBSD 12 or later
   - MacOSX 10.11 or later
 
-### building
+## building
 
     $ cmake
     $ make
 
-### running
+## running
 
 1. Start server in one terminal
 
@@ -181,7 +245,7 @@ TCP Fast Open and TLS 1.3 can be combined
 
        $ ./src/tls13_ping_pong_client 127.0.0.1 3308
 
-### Tracing packets
+## Tracing packets
 
 Start server as before, but add tcpdump:
 
@@ -189,7 +253,7 @@ Start server as before, but add tcpdump:
     $ ./src/tls13_ping_pong_client 127.0.0.1 3308
     $ wireshark tls13.pcap
 
-#### Let wireshark decrypt the TLS packets automatically
+### Let wireshark decrypt the TLS packets automatically
 
 Wireshark 3.x.
 
