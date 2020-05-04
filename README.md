@@ -25,6 +25,7 @@ Over a network with 10ms latency:
 
 | Scenario                               | PING | PONG |
 | -------------------------------------- | ----:| ----:|
+| TLS 1.0 full handshake                 | 69ms | 79ms |
 | TLS 1.3 full handshake                 | 49ms | 59ms |
 | TLS 1.3 0-RTT                          | 20ms | 52ms |
 | TLS 1.3 full handshake + TCP Fast Open | 29ms | 39ms |
@@ -47,12 +48,10 @@ Over a network with 1ms latency:
 - TCP handshake
 - TLS handshake
 - Application data exchange
-- TLS connection shutdown
-- TCP connection shutdown
+- TLS shutdown
+- TCP shutdown
 
-### TLS 1.3 - Full Handshake
-
-A full TLS 1.3 handshake looks like:
+For example, a full TLS 1.3 handshake looks like:
 
     @startuml
     == TCP handshake ==
@@ -75,16 +74,54 @@ A full TLS 1.3 handshake looks like:
     c <- s: TCP FIN
     @enduml
 
-The communication changes direction 8 times, each change of direction
-adds networks latency (here, 10ms):
+
+### TLS 1.0 - Full Handshake
+
+note: applies to TLS 1.0, up to TLS 1.2
 
     ... 0.000 ...
-    c -> s: TCP SYN
+    c -> s: [SYN]
     ... 0.010 ...
-    c <- s: TCP SYN+ACK
+    c <- s: [SYN, ACK]
     ... 0.020 ...
-    c -> s: TCP ACK
+    c -> s: [ACK]
+    ... 0.020 ...
+    c -> s: TLSv1 Client Hello
+    ... 0.030 ...
+    c <- s: [ACK]
+    ... 0.037 ...
+    c <- s: Server Hello, Certificate, Server Key Exchange, Server Hello Done
+    ... 0.048 ...
+    c -> s: Client Key Exchange, Change Cipher Spec, Finished
+    ... 0.058 ...
+    c <- s: New Session Ticket, Change Cipher Spec, Finished
+    ... 0.069 ...
+    c -> s: Application Data, Application Data
+    ... 0.079 ...
+    c <- s: Application Data, Application Data
+    c <- s: Alert: Close Notify
+    ... 0.089 ...
+    c -> s: Alert: Close Notify
+    c -> s: [FIN, ACK]
+    ... 0.099 ...
+    c <- s: [FIN, ACK]
+
+Note: Between the `[ACK]` of the clients `Hello` the server spends ~8ms
+generating the `Server Hello`.
+
+### TLS 1.3 - Full Handshake
+
+TLS 1.3 improves full handshake to require one roundtrip less.
+
+    ... 0.000 ...
+    c -> s: [SYN]
+    ... 0.010 ...
+    c <- s: [SYN, ACK]
+    ... 0.020 ...
+    c -> s: [ACK]
     c -> s: Client Hello
+    ... 0.030 ...
+    c <- s: [ACK]
     ... 0.038 ...
     c <- s: Server Hello, Change Cipher Spec, ...
     ... 0.049 ...
@@ -100,8 +137,6 @@ adds networks latency (here, 10ms):
     c -> s: TCP FIN
     ... 0.079 ...
     c <- s: TCP FIN
-
-- a full `Server Hello` takes about 8ms longer than the normal network latency.
 
 ### TLS 1.3 - Session Resumption
 

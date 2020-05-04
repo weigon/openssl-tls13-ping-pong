@@ -33,8 +33,9 @@
 #include <netdb.h>        // getaddrinfo
 #include <netinet/in.h>   // sockaddr_in
 #include <netinet/tcp.h>  // SOL_TCP
-#include <sys/socket.h>   // SOL_SOCKET
-#include <unistd.h>       // close
+#include <openssl/tls1.h>
+#include <sys/socket.h>  // SOL_SOCKET
+#include <unistd.h>      // close
 
 #include <openssl/err.h>  // ERR_get_error
 #include <openssl/ssl.h>  // SSL_CTX_new
@@ -89,6 +90,12 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
   auto ssl_mem =
       std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx), &SSL_free);
   SSL *ssl = ssl_mem.get();
+
+  std::cout << "// TLS "
+            << (with_session_resumption ? "session resumption"
+                                        : "full handshake")
+            << (with_fast_open ? ", TCP Fast Open" : "")
+            << (early_data ? ", 0-RTT" : "") << std::endl;
 
   addrinfo *ai_raw{};
   addrinfo hints{};
@@ -212,7 +219,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
       }
     } else if (ssl_res > 0) {
       std::cout << "c -> s: "
-                << "// established" << std::endl;
+                << "// established: " << SSL_get_version(ssl) << std::endl;
     }
   }
 
@@ -315,9 +322,27 @@ int main(int argc, char **argv) {
 
   const char default_hostname[] = "127.0.0.1";
   const char default_service[] = "3308";
+  int default_max_proto_version = TLS1_3_VERSION;
 
   const char *hostname = argc < 2 ? default_hostname : argv[1];
   const char *service = argc < 3 ? default_service : argv[2];
+
+  int max_proto_version = default_max_proto_version;
+  if (argc >= 4) {
+    std::string arg(argv[3]);
+    if (arg == "tls1") {
+      max_proto_version = TLS1_VERSION;
+    } else if (arg == "tls1.1") {
+      max_proto_version = TLS1_1_VERSION;
+    } else if (arg == "tls1.2") {
+      max_proto_version = TLS1_2_VERSION;
+    } else if (arg == "tls1.3") {
+      max_proto_version = TLS1_3_VERSION;
+    } else {
+      std::cerr << "unknown max SSL protocol version: " << arg << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
 
   // build SSL context
   auto ssl_ctx_mem = std::unique_ptr<SSL_CTX, void (*)(SSL_CTX *)>(
@@ -357,42 +382,38 @@ int main(int argc, char **argv) {
     }
   });
 
-  std::cout << "// TLS1.3 full handshake" << std::endl;
+  SSL_CTX_set_max_proto_version(ssl_ctx, max_proto_version);
+
   auto ec = do_one(ssl_ctx, hostname, service, false, false, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
-  std::cout << "// TLS1.3 resumption" << std::endl;
   ec = do_one(ssl_ctx, hostname, service, false, true, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
-  std::cout << "// TLS1.3 0-RTT" << std::endl;
   ec = do_one(ssl_ctx, hostname, service, false, true, true);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
-  std::cout << "// TCP-Fast Open, TLS1.3 full handshake" << std::endl;
   ec = do_one(ssl_ctx, hostname, service, true, false, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
-  std::cout << "// TCP-Fast Open, TLS1.3 resumption" << std::endl;
   ec = do_one(ssl_ctx, hostname, service, true, true, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
-  std::cout << "// TCP-Fast Open, TLS1.3 0-RTT" << std::endl;
   ec = do_one(ssl_ctx, hostname, service, true, true, true);
   if (ec) {
     std::cerr << ec.message() << std::endl;
