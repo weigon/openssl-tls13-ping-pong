@@ -42,6 +42,9 @@
 #include <openssl/ssl.h>
 
 #include "file_descriptor.h"
+#include "resolver.h"
+#include "sock_err.h"
+#include "sock_opt.h"
 
 // TCP FastOpen is not enabled by default on Linux.
 //
@@ -60,8 +63,6 @@
 // On FreeBSD:
 //
 // $ sysctl net.inet.tcp.fastopen.server_enable=1
-
-std::error_code last_error_code() { return {errno, std::generic_category()}; }
 
 volatile int want_shutdown{0};
 
@@ -129,21 +130,20 @@ int main(int argc, char **argv) {
   // announce we accept some early data
   SSL_CTX_set_max_early_data(ssl_ctx, 32);
 
+  std::error_code ec;
   // prepare the socket.
   //
   // - resolve the IP and port
   // - bind the resolve address
-  addrinfo *ai_raw{};
   addrinfo hints{};
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_flags = AI_PASSIVE;
-  auto ai_res = getaddrinfo(hostname, service, &hints, &ai_raw);
-  if (ai_res != 0) {
-    std::cerr << last_error_code().message() << std::endl;
+
+  auto ai = address_info(hostname, service, &hints, ec);
+  if (ec) {
+    std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
-  auto ai =
-      std::unique_ptr<addrinfo, void (*)(addrinfo *)>(ai_raw, &freeaddrinfo);
 
   FileDescriptor sock;
 
@@ -162,31 +162,20 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
-  // set socket options on the listening socket
-  //
-  // macosx requires the TCP_FASTOPEN can only be enabled
-  // if the socket is already in listening mode
-  {
-    int qlen{1};
-    if (0 != setsockopt(sock.native_handle(), IPPROTO_TCP, TCP_FASTOPEN, &qlen,
-                        sizeof qlen)) {
-      auto ec = last_error_code();
-      std::cerr << __LINE__ << ": enable TCP FastOpen(): " << ec.message()
-                << std::endl;
-      // may fail if not enabled by the system.
-      if (ec != make_error_code(std::errc::operation_not_permitted)) {
-        return EXIT_FAILURE;
-      }
+  set_tcp_fast_open_server(sock.native_handle(), 1, ec);
+  if (ec) {
+    std::cerr << __LINE__ << ": enable TCP FastOpen(): " << ec.message()
+              << std::endl;
+    // may fail if not enabled by the system.
+    if (ec != make_error_code(std::errc::operation_not_permitted)) {
+      return EXIT_FAILURE;
     }
   }
 
-  {
-    int on{1};
-    if (0 != setsockopt(sock.native_handle(), SOL_SOCKET, SO_REUSEADDR, &on,
-                        sizeof on)) {
-      std::cerr << last_error_code().message() << std::endl;
-      return EXIT_FAILURE;
-    }
+  set_reuse_address(sock.native_handle(), 1, ec);
+  if (ec) {
+    std::cerr << ec.message() << std::endl;
+    return EXIT_FAILURE;
   }
 
   // socket is setup, ready to accept connections.
@@ -202,13 +191,9 @@ int main(int argc, char **argv) {
 
     std::cout << "s <- c: // new connection" << std::endl;
 
-    {
-      int on = 1;
-      if (0 != setsockopt(client_sock.native_handle(), IPPROTO_TCP, TCP_NODELAY,
-                          &on, sizeof on)) {
-        std::cerr << __LINE__ << ": " << last_error_code().message()
-                  << std::endl;
-      }
+    set_tcp_nodelay(client_sock.native_handle(), 1, ec);
+    if (ec) {
+      std::cerr << __LINE__ << ": " << ec.message() << std::endl;
     }
 
     // create a SSL handle and assign it the socket-fd

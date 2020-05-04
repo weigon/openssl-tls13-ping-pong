@@ -21,9 +21,17 @@
 #
 # SPDX-License-Identifier: MIT
 
-ADD_EXECUTABLE(tls13_ping_pong_client client_main.cc)
+ADD_EXECUTABLE(tls13_ping_pong_client
+	client_main.cc
+	sock_opt.cc
+	resolver.cc
+	)
 TARGET_LINK_LIBRARIES(tls13_ping_pong_client OpenSSL::SSL OpenSSL::Crypto)
-ADD_EXECUTABLE(tls13_ping_pong_server server_main.cc)
+ADD_EXECUTABLE(tls13_ping_pong_server
+	server_main.cc
+	sock_opt.cc
+	resolver.cc
+	)
 TARGET_LINK_LIBRARIES(tls13_ping_pong_server OpenSSL::SSL OpenSSL::Crypto)
 
 ADD_CUSTOM_COMMAND(

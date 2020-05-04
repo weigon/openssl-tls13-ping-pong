@@ -29,6 +29,7 @@
 #include <iostream>      // cerr
 #include <memory>        // unique_ptr
 #include <system_error>  // error_code
+#include "sock_opt.h"
 
 #include <netdb.h>        // getaddrinfo
 #include <netinet/in.h>   // sockaddr_in
@@ -51,6 +52,8 @@
 #endif
 
 #include "file_descriptor.h"
+#include "resolver.h"
+#include "sock_err.h"
 
 // remember the last session to assign it to another connection to the same host
 std::unique_ptr<SSL_SESSION, void (*)(SSL_SESSION *)> last_session(
@@ -70,11 +73,6 @@ static int new_session_cb(SSL *s, SSL_SESSION *sess) {
 
   return 1;
 }
-
-/**
- * get last socket error-code.
- */
-std::error_code last_error_code() { return {errno, std::generic_category()}; }
 
 /**
  * run one connection.
@@ -97,15 +95,15 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
             << (with_fast_open ? ", TCP Fast Open" : "")
             << (early_data ? ", 0-RTT" : "") << std::endl;
 
-  addrinfo *ai_raw{};
+  std::error_code ec;
+
   addrinfo hints{};
   hints.ai_socktype = SOCK_STREAM;
-  auto ai_res = getaddrinfo(hostname, service, &hints, &ai_raw);
-  if (ai_res != 0) {
-    return last_error_code();
+
+  auto ai = address_info(hostname, service, &hints, ec);
+  if (ec) {
+    return ec;
   }
-  auto ai =
-      std::unique_ptr<addrinfo, void (*)(addrinfo *)>(ai_raw, &freeaddrinfo);
 
   FileDescriptor sock;
 
@@ -114,34 +112,18 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     return last_error_code();
   }
 
-  {
-    int on = 1;
-    if (0 != setsockopt(sock.native_handle(), IPPROTO_TCP, TCP_NODELAY, &on,
-                        sizeof on)) {
-      std::cerr << __LINE__ << ": setsockopt(" << sock.native_handle()
-                << ", IPPROTO_TCP, TCP_NODELAY): "
-                << last_error_code().message() << std::endl;
-      return last_error_code();
-    }
+  set_tcp_nodelay(sock.native_handle(), 1, ec);
+  if (ec) {
+    std::cerr << __LINE__ << ": setsockopt(" << sock.native_handle()
+              << ", IPPROTO_TCP, TCP_NODELAY): " << ec << std::endl;
+    return ec;
   }
 
   if (with_fast_open) {
-#if defined(__FreeBSD__)
-    int on{1};
-    if (0 != setsockopt(sock.native_handle(), IPPROTO_TCP, TCP_FASTOPEN, &on,
-                        sizeof on)) {
-      return last_error_code();
-    }
+#if defined(__FreeBSD__) || defined(__linux__)
+    set_tcp_fast_open_client(sock.native_handle(), 1, ec);
+    if (ec) return ec;
 
-    if (0 != connect(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
-      return last_error_code();
-    }
-#elif defined(__linux__)
-    int on{1};
-    if (0 != setsockopt(sock.native_handle(), SOL_TCP, TCP_FASTOPEN_CONNECT,
-                        &on, sizeof on)) {
-      return last_error_code();
-    }
     if (0 != connect(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
       return last_error_code();
     }
