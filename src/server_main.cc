@@ -151,6 +151,19 @@ int main(int argc, char **argv) {
     return EXIT_FAILURE;
   }
 
+  if (0 != bind(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
+    std::cerr << __LINE__ << ": " << last_error_code().message() << std::endl;
+    return EXIT_FAILURE;
+  }
+  if (0 != listen(sock.native_handle(), 32)) {
+    std::cerr << __LINE__ << ": " << last_error_code().message() << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  // set socket options on the listening socket
+  //
+  // macosx requires the TCP_FASTOPEN can only be enabled
+  // if the socket is already in listening mode
   {
     int on{1};
     if (0 != setsockopt(sock.native_handle(), IPPROTO_TCP, TCP_FASTOPEN, &on,
@@ -163,15 +176,6 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
       }
     }
-  }
-
-  if (0 != bind(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
-    std::cerr << __LINE__ << ": " << last_error_code().message() << std::endl;
-    return EXIT_FAILURE;
-  }
-  if (0 != listen(sock.native_handle(), 32)) {
-    std::cerr << __LINE__ << ": " << last_error_code().message() << std::endl;
-    return EXIT_FAILURE;
   }
 
   {
