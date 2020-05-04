@@ -21,12 +21,23 @@ send the application over TCP in one packet.
 
 ### Results
 
+Over a network with 10ms latency:
+
 | Scenario                               | PING | PONG |
 | -------------------------------------- | ----:| ----:|
 | TLS 1.3 full handshake                 | 49ms | 59ms |
 | TLS 1.3 0-RTT                          | 20ms | 52ms |
 | TLS 1.3 full handshake + TCP Fast Open | 29ms | 39ms |
 | TLS 1.3 0-RTT + TCP Fast Open          |  0ms | 32ms |
+
+Over a network with 1ms latency:
+
+| Scenario                               | PING | PONG |
+| -------------------------------------- | ----:| ----:|
+| TLS 1.3 full handshake                 | 13ms | 14ms |
+| TLS 1.3 0-RTT                          |  2ms |  7ms |
+| TLS 1.3 full handshake + TCP Fast Open | 11ms | 12ms |
+| TLS 1.3 0-RTT + TCP Fast Open          |  0ms |  5ms |
 
 * PING: duration until PING message is sent to the server
 * PONG: duration until PONG message is received from the server
@@ -41,22 +52,54 @@ send the application over TCP in one packet.
 
 ### TLS 1.3 - Full Handshake
 
-A full TLS handshake takes about 8ms:
+A full TLS 1.3 handshake looks like:
 
-    0.000 c -> s: TCP SYN
-    0.010 c <- s: TCP SYN+ACK
-    0.020 c -> s: TCP ACK
-    0.020 c -> s: Client Hello
-    0.038 c <- s: Server Hello, Change Cipher Spec, ...
-    0.049 c -> s: Change Cipher Spec, Finished
-    0.049 c -> s: PING
-    0.059 c <- s: New Session Ticket
-    0.059 c <- s: New Session Ticket
-    0.059 c <- s: PONG
-    0.059 c <- s: Alert: Close Notify
-    0.069 c -> s: Alert: Close Notify
-    0.069 c -> s: TCP FIN
-    0.079 c <- s: TCP FIN
+    @startuml
+    == TCP handshake ==
+    c -> s: TCP SYN
+    c <- s: TCP SYN+ACK
+    c -> s: TCP ACK
+    == TLS handshake ==
+    c -> s: Client Hello
+    c <- s: Server Hello, Change Cipher Spec, ...
+    c -> s: Change Cipher Spec, Finished
+    c -> s: PING
+    c <- s: New Session Ticket
+    c <- s: New Session Ticket
+    c <- s: PONG
+    == TLS shutdown ==
+    c <- s: Alert: Close Notify
+    c -> s: Alert: Close Notify
+    == TCP shutdown ==
+    c -> s: TCP FIN
+    c <- s: TCP FIN
+    @enduml
+
+The communication changes direction 8 times, each change of direction
+adds networks latency (here, 10ms):
+
+    ... 0.000 ...
+    c -> s: TCP SYN
+    ... 0.010 ...
+    c <- s: TCP SYN+ACK
+    ... 0.020 ...
+    c -> s: TCP ACK
+    c -> s: Client Hello
+    ... 0.038 ...
+    c <- s: Server Hello, Change Cipher Spec, ...
+    ... 0.049 ...
+    c -> s: Change Cipher Spec, Finished
+    c -> s: PING
+    ... 0.059 ...
+    c <- s: New Session Ticket
+    c <- s: New Session Ticket
+    c <- s: PONG
+    c <- s: Alert: Close Notify
+    ... 0.069 ...
+    c -> s: Alert: Close Notify
+    c -> s: TCP FIN
+    ... 0.079 ...
+    c <- s: TCP FIN
 
 - a full `Server Hello` takes about 8ms longer than the normal network latency.
 
@@ -80,18 +123,26 @@ TLS 1.3 supports the sending Application Data in the Client hello packet
 
 The packet flow:
 
-    0.000 c -> s: TCP SYN
-    0.010 c <- s: TCP SYN+ACK
-    0.020 c -> s: TCP ACK
-    0.020 c -> s: Client Hello, Change Cipher Spec, PING
-    0.031 c <- s: Server Hello, Change Cipher Spec, Finished
-    0.042 c -> s: End of Early Data, Finished
-    0.052 c <- s: New Session Ticket
-    0.052 c <- s: PONG
-    0.052 c <- s: Alert: Close Notify
-    0.062 c -> s: Alert: Close Notify
-    0.062 c -> s: TCP FIN
-    0.072 c <- s: TCP FIN
+    ... 0.000 ...
+    c -> s: TCP SYN
+    ... 0.010 ...
+    c <- s: TCP SYN+ACK
+    ... 0.020 ...
+    c -> s: TCP ACK
+    c -> s: Client Hello, Change Cipher Spec, PING
+    ... 0.031 ...
+    c <- s: Server Hello, Change Cipher Spec, Finished
+    ... 0.042 ...
+    c -> s: End of Early Data, Finished
+    ... 0.052 ...
+    c <- s: New Session Ticket
+    c <- s: PONG
+    c <- s: Alert: Close Notify
+    ... 0.062 ...
+    c -> s: Alert: Close Notify
+    c -> s: TCP FIN
+    ... 0.072 ...
+    c <- s: TCP FIN
 
 ## TCP Fast Open
 
@@ -103,10 +154,12 @@ If
 
 it can send data in the first packet of the TCP handshake:
 
-    0.000 c -> s: SYN + Client Data
-    0.010 c <- s: SYN+ACK
-    0.020 c -> s: ACK
-    ...
+    ... 0.000 ...
+    c -> s: SYN + Client Data
+    ... 0.010 ...
+    c <- s: SYN+ACK
+    ... 0.020 ...
+    c -> s: ACK
 
 which allows the server to send a response earlier.
 
@@ -114,19 +167,27 @@ which allows the server to send a response earlier.
 
 TCP Fast Open and TLS 1.3 can be combined
 
-    0.000 c -> s: SYN + Client-Hello
-    0.010 c <- s: SYN+ACK
-    0.017 c <- s: Server Hello, Change Cipher Spec, ...
-    0.019 c -> s: ACK
-    0.029 c -> s: Change Cipher Spec, Finished
-    0.029 c -> s: PING
-    0.039 c <- s: New Session Ticket
-    0.039 c <- s: New Session Ticket
-    0.039 c <- s: PONG
-    0.039 c <- s: Alert: Close Notify
-    0.039 c -> s: Alert: Close Notify
-    0.049 c -> s: TCP FIN
-    0.059 c <- s: TCP FIN
+    ... 0.000 ...
+    c -> s: SYN + Client-Hello
+    ... 0.010 ...
+    c <- s: SYN+ACK
+    ... 0.017 ...
+    c <- s: Server Hello, Change Cipher Spec, ...
+    ... 0.019 ...
+    c -> s: ACK
+    ... 0.029 ...
+    c -> s: Change Cipher Spec, Finished
+    c -> s: PING
+    ... 0.039 ...
+    c <- s: New Session Ticket
+    c <- s: New Session Ticket
+    c <- s: PONG
+    c <- s: Alert: Close Notify
+    c -> s: Alert: Close Notify
+    ... 0.049 ...
+    c -> s: TCP FIN
+    ... 0.059 ...
+    c <- s: TCP FIN
 
 ### TLS 1.3 Session Resumption + TCP Fast Open
 
@@ -136,17 +197,25 @@ TCP Fast Open and TLS 1.3 can be combined
 
 TCP Fast Open and TLS 1.3 can be combined
 
-    0.000 c -> s: SYN + Client-Hello, Change Cipher Spec, PING
-    0.010 c <- s: SYN+ACK
-    0.011 c <- s: Server Hello, Change Cipher Spec, Finished
-    0.019 c -> s: ACK
-    0.022 c -> s: End of Early Data, Finished
-    0.032 c <- s: New Session Ticket
-    0.032 c <- s: PONG
-    0.032 c <- s: Alert: Close Notify
-    0.042 c -> s: Alert: Close Notify
-    0.042 c -> s: TCP FIN
-    0.052 c <- s: TCP FIN
+    ... 0.000 ...
+    c -> s: SYN + Client-Hello, Change Cipher Spec, PING
+    ... 0.010 ...
+    c <- s: SYN+ACK
+    ... 0.011 ...
+    c <- s: Server Hello, Change Cipher Spec, Finished
+    ... 0.019 ...
+    c -> s: ACK
+    ... 0.022 ...
+    c -> s: End of Early Data, Finished
+    ... 0.032 ...
+    c <- s: New Session Ticket
+    c <- s: PONG
+    c <- s: Alert: Close Notify
+    ... 0.042 ...
+    c -> s: Alert: Close Notify
+    c -> s: TCP FIN
+    ... 0.052 ...
+    c <- s: TCP FIN
 
 # API usage
 
@@ -273,8 +342,12 @@ If the kernel support is enabled, the server application can active
 support for TCP Fast Open via a `setsockopt()`:
 
 ```c++
-setsockopt(server_sock, IPPROTO_TCP, TCP_FASTOPEN);
+int on = 1;
+setsockopt(server_sock, IPPROTO_TCP, TCP_FASTOPEN, &on, sizeof on);
 ```
+
+*Note*: On MacOSX the socket must be in listening mode already
+for the `setsockopt()` to succeed.
 
 ### client side support
 
@@ -297,13 +370,17 @@ and use the existing socket APIs by enable the socket option with
 On Linux:
 
 ```c++
-setsockopt(client_sock, IPPROTO_TCP, TCP_FASTOPEN_CONNECT);
+int on = 1;
+setsockopt(client_sock, IPPROTO_TCP, TCP_FASTOPEN_CONNECT,
+  &on, sizeof on);
 ```
 
 On MacOSX and FreeBSD:
 
 ```c++
-setsockopt(client_sock, IPPROTO_TCP, TCP_FASTOPEN);
+int on = 1;
+setsockopt(client_sock, IPPROTO_TCP, TCP_FASTOPEN,
+  &on, sizeof on);
 ```
 
 The `connect()` afterwards will succeed and the `send()` will return
