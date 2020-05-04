@@ -86,7 +86,9 @@ std::error_code last_error_code() { return {errno, std::generic_category()}; }
 std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
                        const char *service, bool with_fast_open,
                        bool with_session_resumption, bool early_data) {
-  auto ssl = std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx), &SSL_free);
+  auto ssl_mem =
+      std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx), &SSL_free);
+  SSL *ssl = ssl_mem.get();
 
   addrinfo *ai_raw{};
   addrinfo hints{};
@@ -154,21 +156,21 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     }
   }
 
-  SSL_set_fd(ssl.get(), sock.native_handle());
+  SSL_set_fd(ssl, sock.native_handle());
   if (last_session && with_session_resumption) {
-    SSL_set_session(ssl.get(), last_session.release());
+    SSL_set_session(ssl, last_session.release());
   }
-  SSL_set_connect_state(ssl.get());
+  SSL_set_connect_state(ssl);
 
   std::string transfer_buf("PING");
 
-  if (early_data && SSL_get0_session(ssl.get()) != nullptr &&
-      SSL_SESSION_get_max_early_data(SSL_get0_session(ssl.get())) > 0) {
+  if (early_data && SSL_get0_session(ssl) != nullptr &&
+      SSL_SESSION_get_max_early_data(SSL_get0_session(ssl)) > 0) {
     size_t written;
-    auto ssl_res = SSL_write_early_data(ssl.get(), transfer_buf.data(),
+    auto ssl_res = SSL_write_early_data(ssl, transfer_buf.data(),
                                         transfer_buf.size(), &written);
     if (ssl_res != 1) {
-      switch (SSL_get_error(ssl.get(), ssl_res)) {
+      switch (SSL_get_error(ssl, ssl_res)) {
         case SSL_ERROR_NONE:
           std::cerr << __LINE__ << ": none" << std::endl;
           break;
@@ -188,9 +190,9 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
   }
 
   {
-    auto ssl_res = SSL_connect(ssl.get());
+    auto ssl_res = SSL_connect(ssl);
     if (ssl_res != 1) {
-      switch (SSL_get_error(ssl.get(), ssl_res)) {
+      switch (SSL_get_error(ssl, ssl_res)) {
         case SSL_ERROR_NONE:
           std::cerr << __LINE__ << ": none" << std::endl;
           break;
@@ -214,11 +216,10 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     }
   }
 
-  if (SSL_get_early_data_status(ssl.get()) != SSL_EARLY_DATA_ACCEPTED) {
-    auto ssl_res =
-        SSL_write(ssl.get(), transfer_buf.data(), transfer_buf.size());
+  if (SSL_get_early_data_status(ssl) != SSL_EARLY_DATA_ACCEPTED) {
+    auto ssl_res = SSL_write(ssl, transfer_buf.data(), transfer_buf.size());
     if (ssl_res < 0) {
-      switch (SSL_get_error(ssl.get(), ssl_res)) {
+      switch (SSL_get_error(ssl, ssl_res)) {
         case SSL_ERROR_NONE:
           std::cerr << __LINE__ << ": none" << std::endl;
           break;
@@ -245,10 +246,10 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     std::string transfer_buf;
     transfer_buf.resize(128);
     size_t transfered;
-    auto ssl_res = SSL_read_ex(ssl.get(), &transfer_buf.front(),
-                               transfer_buf.size(), &transfered);
+    auto ssl_res = SSL_read_ex(ssl, &transfer_buf.front(), transfer_buf.size(),
+                               &transfered);
     if (ssl_res <= 0) {
-      switch (SSL_get_error(ssl.get(), ssl_res)) {
+      switch (SSL_get_error(ssl, ssl_res)) {
         case SSL_ERROR_NONE:
           std::cerr << __LINE__ << ": none" << std::endl;
           break;
@@ -267,7 +268,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
   }
 
   {
-    auto ssl_res = SSL_shutdown(ssl.get());
+    auto ssl_res = SSL_shutdown(ssl);
     if (ssl_res == 0) {
       // not finished yet
       //
@@ -288,7 +289,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
   shutdown(sock.native_handle(), SHUT_WR);
 
   {
-    auto ssl_res = SSL_shutdown(ssl.get());
+    auto ssl_res = SSL_shutdown(ssl);
     if (ssl_res == 0) {
       // not finished yet
       //
@@ -319,21 +320,25 @@ int main(int argc, char **argv) {
   const char *service = argc < 3 ? default_service : argv[2];
 
   // build SSL context
-  auto ssl_ctx = std::unique_ptr<SSL_CTX, void (*)(SSL_CTX *)>(
+  auto ssl_ctx_mem = std::unique_ptr<SSL_CTX, void (*)(SSL_CTX *)>(
       SSL_CTX_new(TLS_client_method()), &SSL_CTX_free);
 
+  SSL_CTX *ssl_ctx = ssl_ctx_mem.get();
+
   // set tmp DH keys
-  auto dh_2048 =
+  auto dh_2048_mem =
       std::unique_ptr<DH, void (*)(DH *)>(DH_get_2048_256(), &DH_free);
-  SSL_CTX_set_tmp_dh(ssl_ctx.get(), dh_2048.get());
+  DH *dh_2048 = dh_2048_mem.get();
+
+  SSL_CTX_set_tmp_dh(ssl_ctx, dh_2048);
 
   // set the elliptic curves lists
-  SSL_CTX_set1_groups_list(ssl_ctx.get(), "P-521:P-384:P-256:X25519");
+  SSL_CTX_set1_groups_list(ssl_ctx, "P-521:P-384:P-256:X25519");
 
   // enable the session cache to allow session resumption
   SSL_CTX_set_session_cache_mode(
-      ssl_ctx.get(), SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL);
-  SSL_CTX_sess_set_new_cb(ssl_ctx.get(), new_session_cb);
+      ssl_ctx, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL);
+  SSL_CTX_sess_set_new_cb(ssl_ctx, new_session_cb);
 
   {
     const char *ssl_keylogfile = getenv("SSLKEYLOGFILE");
@@ -344,52 +349,51 @@ int main(int argc, char **argv) {
     }
   }
   // enable the keylog to get better traces with wireshark
-  SSL_CTX_set_keylog_callback(
-      ssl_ctx.get(), [](const SSL *ssl, const char *line) {
-        const char *ssl_keylogfile = getenv("SSLKEYLOGFILE");
-        if (ssl_keylogfile) {
-          std::ofstream(ssl_keylogfile, std::ios_base::out | std::ios_base::app)
-              << line << "\n";
-        }
-      });
+  SSL_CTX_set_keylog_callback(ssl_ctx, [](const SSL *ssl, const char *line) {
+    const char *ssl_keylogfile = getenv("SSLKEYLOGFILE");
+    if (ssl_keylogfile) {
+      std::ofstream(ssl_keylogfile, std::ios_base::out | std::ios_base::app)
+          << line << "\n";
+    }
+  });
 
   std::cout << "// TLS1.3 full handshake" << std::endl;
-  auto ec = do_one(ssl_ctx.get(), hostname, service, false, false, false);
+  auto ec = do_one(ssl_ctx, hostname, service, false, false, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
   std::cout << "// TLS1.3 resumption" << std::endl;
-  ec = do_one(ssl_ctx.get(), hostname, service, false, true, false);
+  ec = do_one(ssl_ctx, hostname, service, false, true, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
   std::cout << "// TLS1.3 0-RTT" << std::endl;
-  ec = do_one(ssl_ctx.get(), hostname, service, false, true, true);
+  ec = do_one(ssl_ctx, hostname, service, false, true, true);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
   std::cout << "// TCP-Fast Open, TLS1.3 full handshake" << std::endl;
-  ec = do_one(ssl_ctx.get(), hostname, service, true, false, false);
+  ec = do_one(ssl_ctx, hostname, service, true, false, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
   std::cout << "// TCP-Fast Open, TLS1.3 resumption" << std::endl;
-  ec = do_one(ssl_ctx.get(), hostname, service, true, true, false);
+  ec = do_one(ssl_ctx, hostname, service, true, true, false);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;
   }
 
   std::cout << "// TCP-Fast Open, TLS1.3 0-RTT" << std::endl;
-  ec = do_one(ssl_ctx.get(), hostname, service, true, true, true);
+  ec = do_one(ssl_ctx, hostname, service, true, true, true);
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return EXIT_FAILURE;

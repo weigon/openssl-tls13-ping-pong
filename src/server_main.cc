@@ -85,22 +85,24 @@ int main(int argc, char **argv) {
   SSL_library_init();
   SSL_load_error_strings();
 
-  auto ssl_ctx = std::unique_ptr<SSL_CTX, void (*)(SSL_CTX *)>(
+  auto ssl_ctx_mem = std::unique_ptr<SSL_CTX, void (*)(SSL_CTX *)>(
       SSL_CTX_new(TLS_server_method()), &SSL_CTX_free);
+  SSL_CTX *ssl_ctx = ssl_ctx_mem.get();
 
-  auto dh_2048 =
+  auto dh_2048_mem =
       std::unique_ptr<DH, void (*)(DH *)>(DH_get_2048_256(), &DH_free);
+  DH *dh_2048 = dh_2048_mem.get();
 
-  SSL_CTX_set_tmp_dh(ssl_ctx.get(), dh_2048.get());
+  SSL_CTX_set_tmp_dh(ssl_ctx, dh_2048);
 
-  SSL_CTX_set1_groups_list(ssl_ctx.get(), "P-521:P-384:P-256:X25519");
+  SSL_CTX_set1_groups_list(ssl_ctx, "P-521:P-384:P-256:X25519");
 
   const char key_pem[] = "key.pem";
   const char cert_pem[] = "cert.pem";
 
   {
     auto ssl_err =
-        SSL_CTX_use_PrivateKey_file(ssl_ctx.get(), key_pem, SSL_FILETYPE_PEM);
+        SSL_CTX_use_PrivateKey_file(ssl_ctx, key_pem, SSL_FILETYPE_PEM);
     if (ssl_err != 1) {
       std::array<char, 120> errbuf;
       std::cerr << "use-privatekey-file(" << key_pem << ") failed: "
@@ -112,7 +114,7 @@ int main(int argc, char **argv) {
 
   {
     auto ssl_err =
-        SSL_CTX_use_certificate_file(ssl_ctx.get(), cert_pem, SSL_FILETYPE_PEM);
+        SSL_CTX_use_certificate_file(ssl_ctx, cert_pem, SSL_FILETYPE_PEM);
     if (ssl_err != 1) {
       std::array<char, 120> errbuf;
       std::cerr << "use-certificate-file(" << cert_pem << ") failed: "
@@ -125,7 +127,7 @@ int main(int argc, char **argv) {
   }
 
   // announce we accept some early data
-  SSL_CTX_set_max_early_data(ssl_ctx.get(), 32);
+  SSL_CTX_set_max_early_data(ssl_ctx, 32);
 
   // prepare the socket.
   //
@@ -210,19 +212,21 @@ int main(int argc, char **argv) {
     }
 
     // create a SSL handle and assign it the socket-fd
-    auto ssl = std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx.get()),
-                                                     &SSL_free);
-    SSL_set_fd(ssl.get(), client_sock.native_handle());
+    auto ssl_mem =
+        std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx), &SSL_free);
+    SSL *ssl = ssl_mem.get();
+
+    SSL_set_fd(ssl, client_sock.native_handle());
 
     std::string transfer_buf;
     transfer_buf.resize(128);
     size_t transfered{};
     do {
       {
-        auto ssl_res = SSL_read_early_data(ssl.get(), &transfer_buf.front(),
+        auto ssl_res = SSL_read_early_data(ssl, &transfer_buf.front(),
                                            transfer_buf.size(), &transfered);
         if (ssl_res == SSL_READ_EARLY_DATA_ERROR) {
-          switch (SSL_get_error(ssl.get(), ssl_res)) {
+          switch (SSL_get_error(ssl, ssl_res)) {
             case SSL_ERROR_NONE:
               std::cerr << "none" << std::endl;
               break;
@@ -253,9 +257,9 @@ int main(int argc, char **argv) {
 
     {
       // accept the TLS connection
-      auto ssl_res = SSL_accept(ssl.get());
+      auto ssl_res = SSL_accept(ssl);
       if (ssl_res != 1) {
-        switch (SSL_get_error(ssl.get(), ssl_res)) {
+        switch (SSL_get_error(ssl, ssl_res)) {
           case SSL_ERROR_NONE:
             std::cerr << "none" << std::endl;
             break;
@@ -279,12 +283,12 @@ int main(int argc, char **argv) {
     }
 
     // only read data, if no early data was accepted.
-    if (SSL_get_early_data_status(ssl.get()) != SSL_EARLY_DATA_ACCEPTED) {
+    if (SSL_get_early_data_status(ssl) != SSL_EARLY_DATA_ACCEPTED) {
       transfer_buf.resize(128);
-      auto ssl_res = SSL_read_ex(ssl.get(), &transfer_buf.front(),
+      auto ssl_res = SSL_read_ex(ssl, &transfer_buf.front(),
                                  transfer_buf.size(), &transfered);
       if (ssl_res == 0) {
-        switch (SSL_get_error(ssl.get(), ssl_res)) {
+        switch (SSL_get_error(ssl, ssl_res)) {
           case SSL_ERROR_NONE:
             std::cerr << "none" << std::endl;
             break;
@@ -303,11 +307,11 @@ int main(int argc, char **argv) {
     }
 
     transfer_buf.assign("PONG");
-    SSL_write(ssl.get(), transfer_buf.data(), transfer_buf.size());
+    SSL_write(ssl, transfer_buf.data(), transfer_buf.size());
 
     std::cout << "s -> c: " << transfer_buf << std::endl;
     {
-      auto ssl_res = SSL_shutdown(ssl.get());
+      auto ssl_res = SSL_shutdown(ssl);
       if (ssl_res == 0) {
         // not finished yet
         //
@@ -327,7 +331,7 @@ int main(int argc, char **argv) {
     shutdown(sock.native_handle(), SHUT_WR);
 
     {
-      auto ssl_res = SSL_shutdown(ssl.get());
+      auto ssl_res = SSL_shutdown(ssl);
       if (ssl_res == 0) {
         // not finished yet
         //
