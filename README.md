@@ -183,8 +183,8 @@ TCP Fast Open and TLS 1.3 can be combined
     c <- s: New Session Ticket
     c <- s: PONG
     c <- s: Alert: Close Notify
-    c -> s: Alert: Close Notify
     ... 0.049 ...
+    c -> s: Alert: Close Notify
     c -> s: TCP FIN
     ... 0.059 ...
     c <- s: TCP FIN
