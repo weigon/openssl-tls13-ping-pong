@@ -10,12 +10,12 @@ send the application over TCP in one packet.
 [TCP Fast Open]: https://tools.ietf.org/html/rfc7413
 [TLS 1.3]: https://tools.ietf.org/html/rfc8446
 
-## TL;DR;
+## TL;DR
 
 ### Conclusion
 
 1. TLS 1.3 saves a round-trip in the full handshake
-2. session resumption saves about 8ms
+2. session resumption saves about 5-8ms
 3. TLS 1.3 0-RTT saves another round-trip
 4. TCP Fast Open saves another round-trip
 
@@ -44,6 +44,15 @@ Over a network with 1ms latency per direction (RTT is 2ms)
 | -------------------------------------- | ----:| ----:|
 | TLS 1.3 full handshake                 | 13ms | 14ms |
 | TLS 1.3 0-RTT                          |  2ms |  7ms |
+| TLS 1.3 full handshake + TCP Fast Open | 11ms | 12ms |
+| TLS 1.3 0-RTT + TCP Fast Open          |  0ms |  5ms |
+
+Over a network with 10us latency per direction (RTT is 20us)
+
+| Scenario                               | PING | PONG |
+| -------------------------------------- | ----:| ----:|
+| TLS 1.3 full handshake                 |  7ms |  7ms |
+| TLS 1.3 0-RTT                          |  0ms |  2ms |
 | TLS 1.3 full handshake + TCP Fast Open | 11ms | 12ms |
 | TLS 1.3 0-RTT + TCP Fast Open          |  0ms |  5ms |
 
@@ -237,25 +246,50 @@ TCP Fast Open and TLS 1.3 can be combined
 
 TCP Fast Open and TLS 1.3 can be combined
 
-    ... 0.000 ...
+    ... T+0.000 ...
     c -> s: [SYN] + Client-Hello, Change Cipher Spec, PING
-    ... 0.010 ...
+    ... T+0.010 ...
     c <- s: [SYN, ACK]
-    ... 0.011 ...
+    ... T+0.011 ...
     c <- s: Server Hello, Change Cipher Spec, Finished
-    ... 0.019 ...
+    ... T+0.019 ...
     c -> s: [ACK]
-    ... 0.022 ...
+    ... T+0.022 ...
     c -> s: End of Early Data, Finished
-    ... 0.032 ...
+    ... T+0.032 ...
     c <- s: New Session Ticket
     c <- s: PONG
     c <- s: Alert: Close Notify
-    ... 0.042 ...
+    ... T+0.042 ...
     c -> s: Alert: Close Notify
     c -> s: [FIN]
-    ... 0.052 ...
+    ... T+0.052 ...
     c <- s: [FIN]
+
+### Cost of TLS handshake
+
+tracking the time spent of the TCP/TLS handshake over the loopback interface
+(10us latency) allows to measure the duration of each stage.
+
+TLS 1.3 full handshake:
+
+| stage          | duration |
+| -------------- | --------:|
+| client hello   |    0.4ms |
+| server hello   |    6.0ms |
+| client finish  |    1.0ms |
+| data + latency |    0.1ms |
+| TOTAL          |    7.5ms |
+
+TLS 1.3 0-RTT:
+
+| stage          | duration |
+| -------------- | --------:|
+| client hello   |    0.4ms |
+| server hello   |    0.5ms |
+| client finish  |    0.7ms |
+| data + latency |    0.1ms |
+| TOTAL          |    1.7ms |
 
 # API usage
 
