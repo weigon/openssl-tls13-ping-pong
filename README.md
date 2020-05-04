@@ -462,6 +462,9 @@ It replaces the `connect()` + `send()`.
     $ cmake
     $ make
 
+*Note*: On MacOS X you need to pass `-DOPENSSL_ROOT_DIR=<path-to-openssl-binary-directory>`
+to `cmake` as linking against the systems openssl will fail.
+
 ## running
 
 1. Start server in one terminal
@@ -480,20 +483,22 @@ Start server as before, but add tcpdump:
     $ ./src/tls13_ping_pong_client 127.0.0.1 3308
     $ wireshark tls13.pcap
 
+*Note*: On FreeBSD and MacOS X use `lo0` as name for the loopback interface.
+
 ### Let wireshark decrypt the TLS packets automatically
 
-Wireshark 3.x.
+Wireshark 3.x allows to add the session keys that were used for the connection
+into the pcap file:
 
     $ sudo tcpdump -w tls13.pcap -i lo 'port 3308'
     $ SSLKEYLOGFILE=keys.txt ./src/tls13_ping_pong_client 127.0.0.1 3308
     $ editcap --inject-secrets tls,keys.txt tls13.pcap tls13-with-keys-dsb.pcapng
     $ wireshark tls13-with-keys-dsb.pcapng
 
-
 ### Adding latency
 
-To simulate real-life network delays all packets from and to port 3308 where delayed by 10ms
-by using the [netem] network emulator of [tc].
+On Linux, to simulate real-life network delays all packets from and to port 3308
+were delayed by 10ms by using the [netem] network emulator of [tc].
 
     $ sudo tc qdisc add dev lo root handle 1: prio
     $ sudo tc qdisc add dev lo parent  1:3 handle 30: netem delay 10ms
