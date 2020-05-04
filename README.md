@@ -12,6 +12,13 @@ send the application over TCP in one packet.
 
 ## TL;DR;
 
+### Conclusion
+
+1. TLS 1.3 saves a round-trip in the full handshake
+2. session resumption saves about 8ms
+3. TLS 1.3 0-RTT saves another round-trip
+4. TCP Fast Open saves another round-trip
+
 ### A simple use case
 
 1. establish connection
@@ -21,7 +28,7 @@ send the application over TCP in one packet.
 
 ### Results
 
-Over a network with 10ms latency:
+Over a network with 10ms latency per direction (RTT is 20ms):
 
 | Scenario                               | PING | PONG |
 | -------------------------------------- | ----:| ----:|
@@ -31,7 +38,7 @@ Over a network with 10ms latency:
 | TLS 1.3 full handshake + TCP Fast Open | 29ms | 39ms |
 | TLS 1.3 0-RTT + TCP Fast Open          |  0ms | 32ms |
 
-Over a network with 1ms latency:
+Over a network with 1ms latency per direction (RTT is 2ms)
 
 | Scenario                               | PING | PONG |
 | -------------------------------------- | ----:| ----:|
@@ -53,11 +60,10 @@ Over a network with 1ms latency:
 
 For example, a full TLS 1.3 handshake looks like:
 
-    @startuml
     == TCP handshake ==
-    c -> s: TCP SYN
-    c <- s: TCP SYN+ACK
-    c -> s: TCP ACK
+    c -> s: [SYN]
+    c <- s: [SYN, ACK]
+    c -> s: [ACK]
     == TLS handshake ==
     c -> s: Client Hello
     c <- s: Server Hello, Change Cipher Spec, ...
@@ -70,14 +76,13 @@ For example, a full TLS 1.3 handshake looks like:
     c <- s: Alert: Close Notify
     c -> s: Alert: Close Notify
     == TCP shutdown ==
-    c -> s: TCP FIN
-    c <- s: TCP FIN
-    @enduml
+    c -> s: [FIN, ACK]
+    c <- s: [FIN, ACK]
 
 
 ### TLS 1.0 - Full Handshake
 
-note: applies to TLS 1.0, up to TLS 1.2
+*note*: applies to TLS 1.0, up to TLS 1.2
 
     ... 0.000 ...
     c -> s: [SYN]
@@ -134,9 +139,9 @@ TLS 1.3 improves full handshake to require one roundtrip less.
     c <- s: Alert: Close Notify
     ... 0.069 ...
     c -> s: Alert: Close Notify
-    c -> s: TCP FIN
+    c -> s: [FIN, ACK]
     ... 0.079 ...
-    c <- s: TCP FIN
+    c <- s: [FIN, ACK]
 
 ### TLS 1.3 - Session Resumption
 
@@ -159,11 +164,11 @@ TLS 1.3 supports the sending Application Data in the Client hello packet
 The packet flow:
 
     ... 0.000 ...
-    c -> s: TCP SYN
+    c -> s: [SYN]
     ... 0.010 ...
-    c <- s: TCP SYN+ACK
+    c <- s: [SYN, ACK]
     ... 0.020 ...
-    c -> s: TCP ACK
+    c -> s: [ACK]
     c -> s: Client Hello, Change Cipher Spec, PING
     ... 0.031 ...
     c <- s: Server Hello, Change Cipher Spec, Finished
@@ -175,9 +180,9 @@ The packet flow:
     c <- s: Alert: Close Notify
     ... 0.062 ...
     c -> s: Alert: Close Notify
-    c -> s: TCP FIN
+    c -> s: [FIN, ACK]
     ... 0.072 ...
-    c <- s: TCP FIN
+    c <- s: [FIN, ACK]
 
 ## TCP Fast Open
 
@@ -190,11 +195,11 @@ If
 it can send data in the first packet of the TCP handshake:
 
     ... 0.000 ...
-    c -> s: SYN + Client Data
+    c -> s: [SYN] + Client Data
     ... 0.010 ...
-    c <- s: SYN+ACK
+    c <- s: [SYN, ACK]
     ... 0.020 ...
-    c -> s: ACK
+    c -> s: [ACK]
 
 which allows the server to send a response earlier.
 
@@ -203,13 +208,13 @@ which allows the server to send a response earlier.
 TCP Fast Open and TLS 1.3 can be combined
 
     ... 0.000 ...
-    c -> s: SYN + Client-Hello
+    c -> s: [SYN] + Client-Hello
     ... 0.010 ...
-    c <- s: SYN+ACK
+    c <- s: [SYN,ACK]
     ... 0.017 ...
     c <- s: Server Hello, Change Cipher Spec, ...
     ... 0.019 ...
-    c -> s: ACK
+    c -> s: [ACK]
     ... 0.029 ...
     c -> s: Change Cipher Spec, Finished
     c -> s: PING
@@ -220,9 +225,9 @@ TCP Fast Open and TLS 1.3 can be combined
     c <- s: Alert: Close Notify
     ... 0.049 ...
     c -> s: Alert: Close Notify
-    c -> s: TCP FIN
+    c -> s: [FIN,ACK]
     ... 0.059 ...
-    c <- s: TCP FIN
+    c <- s: [FIN,ACK]
 
 ### TLS 1.3 Session Resumption + TCP Fast Open
 
@@ -233,13 +238,13 @@ TCP Fast Open and TLS 1.3 can be combined
 TCP Fast Open and TLS 1.3 can be combined
 
     ... 0.000 ...
-    c -> s: SYN + Client-Hello, Change Cipher Spec, PING
+    c -> s: [SYN] + Client-Hello, Change Cipher Spec, PING
     ... 0.010 ...
-    c <- s: SYN+ACK
+    c <- s: [SYN, ACK]
     ... 0.011 ...
     c <- s: Server Hello, Change Cipher Spec, Finished
     ... 0.019 ...
-    c -> s: ACK
+    c -> s: [ACK]
     ... 0.022 ...
     c -> s: End of Early Data, Finished
     ... 0.032 ...
@@ -248,9 +253,9 @@ TCP Fast Open and TLS 1.3 can be combined
     c <- s: Alert: Close Notify
     ... 0.042 ...
     c -> s: Alert: Close Notify
-    c -> s: TCP FIN
+    c -> s: [FIN]
     ... 0.052 ...
-    c <- s: TCP FIN
+    c <- s: [FIN]
 
 # API usage
 
