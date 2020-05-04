@@ -153,13 +153,6 @@ int main(int argc, char **argv) {
 
   {
     int on{1};
-#if defined(__linux__)
-    if (0 != setsockopt(sock.native_handle(), SOL_TCP, TCP_FASTOPEN, &on,
-                        sizeof on)) {
-      std::cerr << last_error_code().message() << std::endl;
-      return EXIT_FAILURE;
-    }
-#elif defined(__FreeBSD__) || defined(__APPLE__)
     if (0 != setsockopt(sock.native_handle(), IPPROTO_TCP, TCP_FASTOPEN, &on,
                         sizeof on)) {
       auto ec = last_error_code();
@@ -170,7 +163,6 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
       }
     }
-#endif
   }
 
   if (0 != bind(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
