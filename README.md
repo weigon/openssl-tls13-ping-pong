@@ -219,7 +219,7 @@ TCP Fast Open and TLS 1.3 can be combined
 
 # API usage
 
-OpenSSL 1.1.1 added the nessary APIs to use TLS 1.3 session resumption
+OpenSSL 1.1.1 added the necessary APIs to use TLS 1.3 session resumption
 and 0-RTT.
 
 ## TLS Session Resumption
