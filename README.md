@@ -155,7 +155,7 @@ and 0-RTT.
 
 ## TLS Session Resumption
 
-The client MUST 
+The client MUST cache the session tickets the server sends to allow reuse:
 
 ```c++
 std::unique_ptr<SSL_SESSION, void (*)(SSL_SESSION *)> last_session(
@@ -217,6 +217,121 @@ resumable:
   SSL_shutdown(ssl);
 ```
 
+## TCP Fast Open
+
+TCP Fast Open is supported on:
+
+- Linux 3.x
+- Windows 10
+- FreeBSD 12
+- MacOSX 10.11
+
+### kernel side support
+
+#### Linux
+
+Linux requires enabling the server side support for TCP Fast Open
+via `sysctl`.
+
+See https://www.kernel.org/doc/Documentation/networking/ip-sysctl.txt
+
+> `tcp_fastopen` - INTEGER
+>   `0x01` - client (enabled by default)
+>   `0x02` - server (disabled by default)
+
+```sh
+# current value
+$ cat /proc/sys/net/ipv4/tcp_fastopen
+1
+# enable client and server
+$ echo "3" | sudo tee /proc/sys/net/ipv4/tcp_fastopen
+```
+
+#### FreeBSD
+
+On FreeBSD:
+
+```sh
+$ sysctl net.inet.tcp.fastopen.server_enable
+0
+$ sysctl net.inet.tcp.fastopen.client_enable
+1
+```
+
+#### MacOS X
+
+MacOS X has client and server support for TCP Fast Open enabled by default.
+
+```sh
+$ sysctl net.inet.tcp.fastopen
+3
+```
+
+### server side support
+
+If the kernel support is enabled, the server application can active
+support for TCP Fast Open via a `setsockopt()`:
+
+```c++
+setsockopt(server_sock, IPPROTO_TCP, TCP_FASTOPEN);
+```
+
+### client side support
+
+Different API styles exist to enable sending application data
+at connect time
+
+- delay connect until first write
+- use sendto()
+- use new API
+
+The `delay connect until first write` style allows easy integration
+with existing socket abstractions like the one in OpenSSL.
+
+#### delay connect until first write
+
+Linux and FreeBSD allow to delay the connect until the first write
+and use the existing socket APIs by enable the socket option with
+`setsockopt()`.
+
+On Linux:
+
+```c++
+setsockopt(client_sock, IPPROTO_TCP, TCP_FASTOPEN_CONNECT);
+```
+
+On MacOSX and FreeBSD:
+
+```c++
+setsockopt(client_sock, IPPROTO_TCP, TCP_FASTOPEN);
+```
+
+The `connect()` afterwards will succeed and the `send()` will return
+the errors like `EINPROGRESS` that would otherwise happen with `connect()`.
+
+```c++
+// no op
+connect(client_sock, addr, addr_len);
+
+// SYN + data.
+send(client_sock, data, data_len);
+```
+
+#### use sendto() to connect with data
+
+On Linux `sendto()` can be used to established a connection and send data
+in the first packet by setting the `MSG_FASTOPEN` flag:
+
+```c++
+sendto(sock, data, datalen, MSG_FASTOPEN, addr, addrlen);
+```
+
+It replaces the `connect()` + `send()`.
+
+#### use a new API to connect with data
+
+- Windows has `ConnectEx()`
+- MacOSX has `connectx()`
 
 # Examples
 
