@@ -91,7 +91,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
   addrinfo *ai_raw{};
   addrinfo hints{};
   hints.ai_socktype = SOCK_STREAM;
-  auto ai_res = getaddrinfo(hostname, service, nullptr, &ai_raw);
+  auto ai_res = getaddrinfo(hostname, service, &hints, &ai_raw);
   if (ai_res != 0) {
     return last_error_code();
   }
