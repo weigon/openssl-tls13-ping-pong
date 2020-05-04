@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
   addrinfo hints{};
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_flags = AI_PASSIVE;
-  auto ai_res = getaddrinfo(hostname, service, nullptr, &ai_raw);
+  auto ai_res = getaddrinfo(hostname, service, &hints, &ai_raw);
   if (ai_res != 0) {
     std::cerr << last_error_code().message() << std::endl;
     return EXIT_FAILURE;
