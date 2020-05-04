@@ -165,9 +165,9 @@ int main(int argc, char **argv) {
   // macosx requires the TCP_FASTOPEN can only be enabled
   // if the socket is already in listening mode
   {
-    int on{1};
-    if (0 != setsockopt(sock.native_handle(), IPPROTO_TCP, TCP_FASTOPEN, &on,
-                        sizeof on)) {
+    int qlen{1};
+    if (0 != setsockopt(sock.native_handle(), IPPROTO_TCP, TCP_FASTOPEN, &qlen,
+                        sizeof qlen)) {
       auto ec = last_error_code();
       std::cerr << __LINE__ << ": enable TCP FastOpen(): " << ec.message()
                 << std::endl;
