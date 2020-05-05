@@ -371,8 +371,8 @@ via `sysctl`.
 See https://www.kernel.org/doc/Documentation/networking/ip-sysctl.txt
 
 > `tcp_fastopen` - INTEGER
->   `0x01` - client (enabled by default)
->   `0x02` - server (disabled by default)
+>  - `0x01` - client (enabled by default)
+>  - `0x02` - server (disabled by default)
 
 ```sh
 # current value
