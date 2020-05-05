@@ -12,52 +12,57 @@ send the application over TCP in one packet.
 
 ## TL;DR
 
-### Conclusion
-
-1. TLS 1.3 saves a round-trip in the full handshake
+1. using TLS 1.3 instead of TLS 1.2 saves a round-trip in the full handshake
 2. session resumption saves about 5-8ms
 3. TLS 1.3 0-RTT saves another round-trip
 4. TCP Fast Open saves another round-trip
 
-### A simple use case
+### Scenario
+
+A simple use case
 
 1. establish connection
 2. send PING
 3. receive PONG
 4. close connection
 
-### Results
+over a network with a round-trip-time (RTT) of
 
-Over a network with 10ms latency per direction (RTT is 20ms):
+- 200ms (between DCs, different region)
+- 20ms (between DCs, same region)
+- 2ms (in a DC)
+- 0.2ms (LAN)
+- 0.02ms (loopback)
 
-| Scenario                               | PING | PONG |
-| -------------------------------------- | ----:| ----:|
-| TLS 1.0 full handshake                 | 69ms | 79ms |
-| TLS 1.3 full handshake                 | 49ms | 59ms |
-| TLS 1.3 0-RTT                          | 20ms | 52ms |
-| TLS 1.3 full handshake + TCP Fast Open | 29ms | 39ms |
-| TLS 1.3 0-RTT + TCP Fast Open          |  0ms | 32ms |
+#### RTT 200ms
 
-Over a network with 1ms latency per direction (RTT is 2ms)
+| TLS Version       | Full Handshake | Full Handshake + TFO | Resumption | Resumption + TFO |
+| ----------------- | --------------:| --------------------:| ----------:| ----------------:|
+| TLS 1.0, 1.1, 1.2 |       809.50ms |             609.20ms |   704.90ms |         504.80ms |
+| TLS 1.3           |       609.30ms |             409.40ms |   602.60ms |         402.50ms |
 
-| Scenario                               | PING | PONG |
-| -------------------------------------- | ----:| ----:|
-| TLS 1.3 full handshake                 | 13ms | 14ms |
-| TLS 1.3 0-RTT                          |  2ms |  7ms |
-| TLS 1.3 full handshake + TCP Fast Open | 11ms | 12ms |
-| TLS 1.3 0-RTT + TCP Fast Open          |  0ms |  5ms |
+#### RTT 20ms
 
-Over a network with 10us latency per direction (RTT is 20us)
+| TLS Version       | Full Handshake | Full Handshake + TFO | Resumption | Resumption + TFO |
+| ----------------- | --------------:| --------------------:| ----------:| ----------------:|
+| TLS 1.0, 1.1, 1.2 |        88.92ms |              69.13ms |    74.88ms |          54.82ms |
+| TLS 1.3           |        69.20ms |              49.17ms |    62.52ms |          42.53ms |
 
-| Scenario                               | PING | PONG |
-| -------------------------------------- | ----:| ----:|
-| TLS 1.3 full handshake                 |  7ms |  7ms |
-| TLS 1.3 0-RTT                          |  0ms |  2ms |
-| TLS 1.3 full handshake + TCP Fast Open | 11ms | 12ms |
-| TLS 1.3 0-RTT + TCP Fast Open          |  0ms |  5ms |
+*Note*: `TFO` is TCP Fast Open.
 
-* PING: duration until PING message is sent to the server
-* PONG: duration until PONG message is received from the server
+#### RTT 2ms
+
+| TLS Version       | Full Handshake | Full Handshake + TFO | Resumption | Resumption + TFO |
+| ----------------- | --------------:| --------------------:| ----------:| --------- ------:|
+| TLS 1.0, 1.1, 1.2 |        15.26ms |              13.67ms |    11.51ms |           9.93ms |
+| TLS 1.3           |        13.07ms |              11.30ms |     8.28ms |           6.27ms |
+
+#### RTT 0.2ms
+
+| TLS Version       | Full Handshake | Full Handshake + TFO | Resumption | Resumption + TFO |
+| ----------------- | --------------:| --------------------:| ----------:| ----------------:|
+| TLS 1.0, 1.1, 1.2 |         5.92ms |               6.03ms |     3.59ms |           3.68ms |
+| TLS 1.3           |         6.56ms |               6.28ms |     2.58ms |           2.47ms |
 
 ## TLS Connection
 
@@ -89,9 +94,7 @@ For example, a full TLS 1.3 handshake looks like:
     c <- s: [FIN, ACK]
 
 
-### TLS 1.0 - Full Handshake
-
-*note*: applies to TLS 1.0, up to TLS 1.2
+### TLS 1.0-TLS.1.2 - Full Handshake
 
     ... 0.000 ...
     c -> s: [SYN]
@@ -120,7 +123,7 @@ For example, a full TLS 1.3 handshake looks like:
     ... 0.099 ...
     c <- s: [FIN, ACK]
 
-Note: Between the `[ACK]` of the clients `Hello` the server spends ~8ms
+*Note*: Between the `[ACK]` of the clients `Hello` the server spends ~8ms
 generating the `Server Hello`.
 
 ### TLS 1.3 - Full Handshake
@@ -246,29 +249,29 @@ TCP Fast Open and TLS 1.3 can be combined
 
 TCP Fast Open and TLS 1.3 can be combined
 
-    ... T+0.000 ...
+    ... 0.000 ...
     c -> s: [SYN] + Client-Hello, Change Cipher Spec, PING
-    ... T+0.010 ...
+    ... 0.010 ...
     c <- s: [SYN, ACK]
-    ... T+0.011 ...
+    ... 0.011 ...
     c <- s: Server Hello, Change Cipher Spec, Finished
-    ... T+0.019 ...
+    ... 0.019 ...
     c -> s: [ACK]
-    ... T+0.022 ...
+    ... 0.022 ...
     c -> s: End of Early Data, Finished
-    ... T+0.032 ...
+    ... 0.032 ...
     c <- s: New Session Ticket
     c <- s: PONG
     c <- s: Alert: Close Notify
-    ... T+0.042 ...
+    ... 0.042 ...
     c -> s: Alert: Close Notify
     c -> s: [FIN]
-    ... T+0.052 ...
+    ... 0.052 ...
     c <- s: [FIN]
 
 ### Cost of TLS handshake
 
-tracking the time spent of the TCP/TLS handshake over the loopback interface
+Tracking the time spent of the TCP/TLS handshake over the loopback interface
 (10us latency) allows to measure the duration of each stage.
 
 TLS 1.3 full handshake:
@@ -279,9 +282,9 @@ TLS 1.3 full handshake:
 | server hello   |    6.0ms |
 | client finish  |    1.0ms |
 | data + latency |    0.1ms |
-| TOTAL          |    7.5ms |
+| **TOTAL**      |    7.5ms |
 
-TLS 1.3 0-RTT:
+TLS 1.3 session resumption:
 
 | stage          | duration |
 | -------------- | --------:|
@@ -289,7 +292,7 @@ TLS 1.3 0-RTT:
 | server hello   |    0.5ms |
 | client finish  |    0.7ms |
 | data + latency |    0.1ms |
-| TOTAL          |    1.7ms |
+| **TOTAL**      |    1.7ms |
 
 # API usage
 
@@ -508,18 +511,18 @@ to `cmake` as linking against the systems openssl will fail.
 
 1. Start server in one terminal
 
-       $ ./src/tls13_ping_pong_server 127.0.0.1 3308
+       $ ./src/tls13_ping_pong_server --port=3308
 
 2. run the client in another terminal
 
-       $ ./src/tls13_ping_pong_client 127.0.0.1 3308
+       $ ./src/tls13_ping_pong_client --port=3308
 
 ## Tracing packets
 
 Start server as before, but add tcpdump:
 
     $ sudo tcpdump -w tls13.pcap -i lo 'port 3308'
-    $ ./src/tls13_ping_pong_client 127.0.0.1 3308
+    $ ./src/tls13_ping_pong_client --port=3308
     $ wireshark tls13.pcap
 
 *Note*: On FreeBSD and MacOS X use `lo0` as name for the loopback interface.
@@ -530,7 +533,7 @@ Wireshark 3.x allows to add the session keys that were used for the connection
 into the pcap file:
 
     $ sudo tcpdump -w tls13.pcap -i lo 'port 3308'
-    $ SSLKEYLOGFILE=keys.txt ./src/tls13_ping_pong_client 127.0.0.1 3308
+    $ SSLKEYLOGFILE=keys.txt ./src/tls13_ping_pong_client --port=3308
     $ editcap --inject-secrets tls,keys.txt tls13.pcap tls13-with-keys-dsb.pcapng
     $ wireshark tls13-with-keys-dsb.pcapng
 

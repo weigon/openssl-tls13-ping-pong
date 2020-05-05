@@ -22,14 +22,16 @@
  * SPDX-License-Identifier: MIT
  */
 #include <array>
-#include <csignal>       // signal
-#include <cstdlib>       // EXIT_SUCCESS
-#include <fstream>       // ofstream
-#include <ios>           // ios_base
-#include <iostream>      // cerr
+#include <chrono>
+#include <csignal>   // signal
+#include <cstdlib>   // EXIT_SUCCESS
+#include <fstream>   // ofstream
+#include <ios>       // ios_base
+#include <iostream>  // cerr
+#include <map>
 #include <memory>        // unique_ptr
 #include <system_error>  // error_code
-#include "sock_opt.h"
+#include <vector>
 
 #include <netdb.h>        // getaddrinfo
 #include <netinet/in.h>   // sockaddr_in
@@ -54,6 +56,7 @@
 #include "file_descriptor.h"
 #include "resolver.h"
 #include "sock_err.h"
+#include "sock_opt.h"
 
 // remember the last session to assign it to another connection to the same host
 std::unique_ptr<SSL_SESSION, void (*)(SSL_SESSION *)> last_session(
@@ -84,16 +87,19 @@ static int new_session_cb(SSL *s, SSL_SESSION *sess) {
  */
 std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
                        const char *service, bool with_fast_open,
-                       bool with_session_resumption, bool early_data) {
+                       bool with_session_resumption, bool early_data,
+                       const std::string &data, int verbosity) {
   auto ssl_mem =
       std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx), &SSL_free);
   SSL *ssl = ssl_mem.get();
 
-  std::cout << "// TLS "
-            << (with_session_resumption ? "session resumption"
-                                        : "full handshake")
-            << (with_fast_open ? ", TCP Fast Open" : "")
-            << (early_data ? ", 0-RTT" : "") << std::endl;
+  if (verbosity > 1) {
+    std::cout << "// TLS "
+              << (with_session_resumption ? "session resumption"
+                                          : "full handshake")
+              << (with_fast_open ? ", TCP Fast Open" : "")
+              << (early_data ? ", 0-RTT" : "") << std::endl;
+  }
 
   std::error_code ec;
 
@@ -151,7 +157,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
   }
   SSL_set_connect_state(ssl);
 
-  std::string transfer_buf("PING");
+  std::string transfer_buf(data);
 
   if (early_data && SSL_get0_session(ssl) != nullptr &&
       SSL_SESSION_get_max_early_data(SSL_get0_session(ssl)) > 0) {
@@ -200,8 +206,10 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
           break;
       }
     } else if (ssl_res > 0) {
-      std::cout << "c -> s: "
-                << "// established: " << SSL_get_version(ssl) << std::endl;
+      if (verbosity > 1) {
+        std::cout << "c -> s: "
+                  << "// established: " << SSL_get_version(ssl) << std::endl;
+      }
     }
   }
 
@@ -227,7 +235,9 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
           break;
       }
     } else if (ssl_res > 0) {
-      std::cout << "c -> s: " << transfer_buf.data() << std::endl;
+      if (verbosity > 1) {
+        std::cout << "c -> s: " << transfer_buf.data() << std::endl;
+      }
     }
   }
 
@@ -252,7 +262,9 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
       }
     } else {
       transfer_buf.resize(transfered);
-      std::cerr << "c <- s: " << transfer_buf.data() << std::endl;
+      if (verbosity > 1) {
+        std::cout << "c <- s: " << transfer_buf.data() << std::endl;
+      }
     }
   }
 
@@ -262,10 +274,14 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
       // not finished yet
       //
       // but we'll close the connection anyway.
-      std::cout << "c -> s: shutdown in-progress" << std::endl;
+      if (verbosity > 1) {
+        std::cout << "c -> s: shutdown in-progress" << std::endl;
+      }
     } else if (ssl_res == 1) {
       // finished
-      std::cout << "c -> s: shutdown finished" << std::endl;
+      if (verbosity > 1) {
+        std::cout << "c -> s: shutdown finished" << std::endl;
+      }
     } else if (ssl_res == -1) {
       std::array<char, 120> errbuf;
       std::cerr << __LINE__
@@ -274,7 +290,9 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     }
   }
 
-  std::cout << "c -x s: // shutdown" << std::endl;
+  if (verbosity > 1) {
+    std::cout << "c -x s: // shutdown" << std::endl;
+  }
   shutdown(sock.native_handle(), SHUT_WR);
 
   {
@@ -283,10 +301,14 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
       // not finished yet
       //
       // but we'll close the connection anyway.
-      std::cout << "c -> s: shutdown in-progress" << std::endl;
+      if (verbosity > 1) {
+        std::cout << "c -> s: shutdown in-progress" << std::endl;
+      }
     } else if (ssl_res == 1) {
       // finished
-      std::cout << "c -> s: shutdown finished" << std::endl;
+      if (verbosity > 1) {
+        std::cout << "c -> s: shutdown finished" << std::endl;
+      }
     } else if (ssl_res == -1) {
       std::array<char, 120> errbuf;
       std::cerr << __LINE__
@@ -295,23 +317,71 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     }
   }
 
-  std::cout << "c -x s: // closed" << std::endl;
+  if (verbosity > 1) {
+    std::cout << "c -x s: // closed" << std::endl;
+  }
   return {};
 }
 
 int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
 
-  const char default_hostname[] = "127.0.0.1";
-  const char default_service[] = "3308";
-  int default_max_proto_version = TLS1_3_VERSION;
+  std::map<std::string, std::string> args{
+      {"hostname", "127.0.0.1"},
+      {"port", "3308"},
+      {"tls-max-proto", "tls1.3"},
+      {"tls-resumption", "1"},
+      {"tcp-fast-open", "1"},
+      {"tls-early-data", ""},
+      {"data", "PING"},
+      {"rounds", "1"},
+      {"verbosity", "0"},
+      {"cmd", "run"},
+  };
+  for (int ndx = 1; ndx < argc; ++ndx) {
+    std::string arg(argv[ndx]);
 
-  const char *hostname = argc < 2 ? default_hostname : argv[1];
-  const char *service = argc < 3 ? default_service : argv[2];
+    if (arg.substr(0, 2) == "--") {
+      arg.erase(0, 2);
 
-  int max_proto_version = default_max_proto_version;
-  if (argc >= 4) {
-    std::string arg(argv[3]);
+      auto eq_pos = arg.find('=');
+      if (eq_pos == std::string::npos) {
+        return EXIT_FAILURE;
+      }
+      auto key = arg.substr(0, eq_pos);
+      auto value = arg.substr(eq_pos + 1);
+
+      auto it = args.find(key);
+      if (it == args.end()) {
+        std::cerr << "unsupported option: " << key << std::endl;
+        return EXIT_FAILURE;
+      }
+
+      it->second = value;
+    } else if (arg.substr(0, 1) == "-") {
+      if (arg.substr(1) == "?") {
+        args.at("cmd") = "help";
+      } else {
+        std::cerr << "unsupport arg: " << arg << std::endl;
+        return EXIT_FAILURE;
+      }
+    } else {
+      std::cerr << "unsupport arg: " << arg << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+
+  if (args.at("cmd") == "help") {
+    return EXIT_SUCCESS;
+  }
+
+  const char *hostname = args.at("hostname").c_str();
+  const char *service = args.at("port").c_str();
+
+  int max_proto_version{};
+  auto arg_it = args.find("tls-max-proto");
+  if (arg_it != args.end()) {
+    auto arg = arg_it->second;
     if (arg == "tls1") {
       max_proto_version = TLS1_VERSION;
     } else if (arg == "tls1.1") {
@@ -324,6 +394,10 @@ int main(int argc, char **argv) {
       std::cerr << "unknown max SSL protocol version: " << arg << std::endl;
       return EXIT_FAILURE;
     }
+  }
+
+  if (argc >= 5) {
+    std::string arg(argv[4]);
   }
 
   // build SSL context
@@ -366,41 +440,49 @@ int main(int argc, char **argv) {
 
   SSL_CTX_set_max_proto_version(ssl_ctx, max_proto_version);
 
-  auto ec = do_one(ssl_ctx, hostname, service, false, false, false);
-  if (ec) {
-    std::cerr << ec.message() << std::endl;
-    return EXIT_FAILURE;
+  bool tls_resumption = args.at("tls-resumption") == "1";
+  bool tls_early_data = args.at("tls-early-data") == "1";
+  bool tcp_fast_open = args.at("tcp-fast-open") == "1";
+  auto rounds = std::stol(args.at("rounds"));
+  auto verbosity = std::stol(args.at("verbosity"));
+  const auto data = args.at("data");
+
+  if (tcp_fast_open || tls_resumption) {
+    auto ec = do_one(ssl_ctx, hostname, service, false, false, false, data,
+                     verbosity);
+    if (ec) {
+      std::cerr << ec.message() << std::endl;
+      return EXIT_FAILURE;
+    }
   }
 
-  ec = do_one(ssl_ctx, hostname, service, false, true, false);
-  if (ec) {
-    std::cerr << ec.message() << std::endl;
-    return EXIT_FAILURE;
+  // warmup
+  for (size_t round = 0; round < rounds; ++round) {
+    auto ec = do_one(ssl_ctx, hostname, service, tcp_fast_open, tls_resumption,
+                     tls_early_data, data, verbosity);
+    if (ec) {
+      std::cerr << ec.message() << std::endl;
+      return EXIT_FAILURE;
+    }
   }
 
-  ec = do_one(ssl_ctx, hostname, service, false, true, true);
-  if (ec) {
-    std::cerr << ec.message() << std::endl;
-    return EXIT_FAILURE;
+  // bench
+  auto start = std::chrono::system_clock::now();
+  for (size_t round = 0; round < rounds; ++round) {
+    auto ec = do_one(ssl_ctx, hostname, service, tcp_fast_open, tls_resumption,
+                     tls_early_data, data, verbosity);
+    if (ec) {
+      std::cerr << ec.message() << std::endl;
+      return EXIT_FAILURE;
+    }
   }
+  auto now = std::chrono::system_clock::now();
 
-  ec = do_one(ssl_ctx, hostname, service, true, false, false);
-  if (ec) {
-    std::cerr << ec.message() << std::endl;
-    return EXIT_FAILURE;
-  }
-
-  ec = do_one(ssl_ctx, hostname, service, true, true, false);
-  if (ec) {
-    std::cerr << ec.message() << std::endl;
-    return EXIT_FAILURE;
-  }
-
-  ec = do_one(ssl_ctx, hostname, service, true, true, true);
-  if (ec) {
-    std::cerr << ec.message() << std::endl;
-    return EXIT_FAILURE;
-  }
+  std::cout << "rounds: " << rounds << std::endl;
+  auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - start)
+                .count();
+  std::cout << "runtime: " << ms << "ms" << std::endl;
+  std::cout << "round-time: " << ms / rounds << "ms" << std::endl;
 
   return EXIT_SUCCESS;
 }

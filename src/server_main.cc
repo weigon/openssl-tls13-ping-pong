@@ -25,8 +25,10 @@
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <system_error>
+#include <vector>
 
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -72,10 +74,50 @@ int main(int argc, char **argv) {
   // don't signal SIGPIPE on write() to a closed connection
   signal(SIGPIPE, SIG_IGN);
 
-  const char default_service[] = "3308";
+  std::map<std::string, std::string> args{
+      {"hostname", "127.0.0.1"}, {"port", "3308"}, {"data", "PONG"},
+      {"verbosity", "0"},        {"cmd", "run"},
+  };
+  for (int ndx = 1; ndx < argc; ++ndx) {
+    std::string arg(argv[ndx]);
 
-  const char *hostname = argc < 2 ? nullptr : argv[1];
-  const char *service = argc < 3 ? default_service : argv[2];
+    if (arg.substr(0, 2) == "--") {
+      arg.erase(0, 2);
+
+      auto eq_pos = arg.find('=');
+      if (eq_pos == std::string::npos) {
+        return EXIT_FAILURE;
+      }
+      auto key = arg.substr(0, eq_pos);
+      auto value = arg.substr(eq_pos + 1);
+
+      auto it = args.find(key);
+      if (it == args.end()) {
+        std::cerr << "unsupported option: " << key << std::endl;
+        return EXIT_FAILURE;
+      }
+
+      it->second = value;
+    } else if (arg.substr(0, 1) == "-") {
+      if (arg.substr(1) == "?") {
+        args.at("cmd") = "help";
+      } else {
+        std::cerr << "unsupport arg: " << arg << std::endl;
+        return EXIT_FAILURE;
+      }
+    } else {
+      std::cerr << "unsupport arg: " << arg << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
+
+  if (args.at("cmd") == "help") {
+    return EXIT_SUCCESS;
+  }
+
+  const char *hostname = args.at("hostname").c_str();
+  const char *service = args.at("port").c_str();
+  const auto verbosity = std::stol(args.at("verbosity"));
 
   // allow the interrupt the blocking accept() call with SIGINT, SIGTERM
   struct sigaction action {};
@@ -188,8 +230,9 @@ int main(int argc, char **argv) {
       std::cerr << last_error_code().message() << std::endl;
       return EXIT_FAILURE;
     }
-
-    std::cout << "s <- c: // new connection" << std::endl;
+    if (verbosity > 1) {
+      std::cout << "s <- c: // new connection" << std::endl;
+    }
 
     set_tcp_nodelay(client_sock.native_handle(), 1, ec);
     if (ec) {
@@ -230,12 +273,16 @@ int main(int argc, char **argv) {
         } else if (ssl_res == SSL_READ_EARLY_DATA_FINISH) {
           transfer_buf.resize(transfered);
           if (transfered > 0) {
-            std::cout << "s <- c: " << transfer_buf << std::endl;
+            if (verbosity > 1) {
+              std::cout << "s <- c: " << transfer_buf << std::endl;
+            }
           }
           break;
         } else if (ssl_res == SSL_READ_EARLY_DATA_SUCCESS) {
           transfer_buf.resize(transfered);
-          std::cout << "s <- c: " << transfer_buf << std::endl;
+          if (verbosity > 1) {
+            std::cout << "s <- c: " << transfer_buf << std::endl;
+          }
         }
       }
     } while (true);
@@ -264,7 +311,9 @@ int main(int argc, char **argv) {
         continue;
       }
 
-      std::cout << "s -> c: // established" << std::endl;
+      if (verbosity > 1) {
+        std::cout << "s -> c: // established" << std::endl;
+      }
     }
 
     // only read data, if no early data was accepted.
@@ -287,24 +336,32 @@ int main(int argc, char **argv) {
         }
       } else if (ssl_res == 1) {
         transfer_buf.resize(transfered);
-        std::cout << "s <- c: " << transfer_buf << std::endl;
+        if (verbosity > 1) {
+          std::cout << "s <- c: " << transfer_buf << std::endl;
+        }
       }
     }
 
-    transfer_buf.assign("PONG");
+    transfer_buf.assign(args.at("data"));
     SSL_write(ssl, transfer_buf.data(), transfer_buf.size());
 
-    std::cout << "s -> c: " << transfer_buf << std::endl;
+    if (verbosity > 1) {
+      std::cout << "s -> c: " << transfer_buf << std::endl;
+    }
     {
       auto ssl_res = SSL_shutdown(ssl);
       if (ssl_res == 0) {
         // not finished yet
         //
         // but we'll close the connection anyway.
-        std::cout << "s -> c: shutdown in-progress" << std::endl;
+        if (verbosity > 1) {
+          std::cout << "s -> c: shutdown in-progress" << std::endl;
+        }
       } else if (ssl_res == 1) {
         // finished
-        std::cout << "s -> c: shutdown finished" << std::endl;
+        if (verbosity > 1) {
+          std::cout << "s -> c: shutdown finished" << std::endl;
+        }
       } else if (ssl_res == -1) {
         std::array<char, 120> errbuf;
         std::cerr << __LINE__ << ": ssl: "
@@ -321,10 +378,14 @@ int main(int argc, char **argv) {
         // not finished yet
         //
         // but we'll close the connection anyway.
-        std::cout << "s -> c: shutdown in-progress" << std::endl;
+        if (verbosity > 1) {
+          std::cout << "s -> c: shutdown in-progress" << std::endl;
+        }
       } else if (ssl_res == 1) {
         // finished
-        std::cout << "s -> c: shutdown finished" << std::endl;
+        if (verbosity > 1) {
+          std::cout << "s -> c: shutdown finished" << std::endl;
+        }
       } else if (ssl_res == -1) {
         std::array<char, 120> errbuf;
         std::cerr << __LINE__ << ": ssl: "
@@ -332,7 +393,9 @@ int main(int argc, char **argv) {
                   << std::endl;
       }
     }
-    std::cout << "s -x c: // closed" << std::endl;
+    if (verbosity > 1) {
+      std::cout << "s -x c: // closed" << std::endl;
+    }
   } while (!want_shutdown);
 
   return 0;
