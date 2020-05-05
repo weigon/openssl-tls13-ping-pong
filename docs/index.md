@@ -74,54 +74,12 @@ over a network with a round-trip-time (RTT) of
 
 For example, a full TLS 1.3 handshake looks like:
 
-    == TCP handshake ==
-    c -> s: [SYN]
-    c <- s: [SYN, ACK]
-    c -> s: [ACK]
-    == TLS handshake ==
-    c -> s: Client Hello
-    c <- s: Server Hello, Change Cipher Spec, ...
-    c -> s: Change Cipher Spec, Finished
-    c -> s: PING
-    c <- s: New Session Ticket
-    c <- s: New Session Ticket
-    c <- s: PONG
-    == TLS shutdown ==
-    c <- s: Alert: Close Notify
-    c -> s: Alert: Close Notify
-    == TCP shutdown ==
-    c -> s: [FIN, ACK]
-    c <- s: [FIN, ACK]
-
+![TCP TLS Handshake](/images/tcp-tls-handshake.svg)
 
 ### TLS 1.0-TLS.1.2 - Full Handshake
 
-    ... 0.000 ...
-    c -> s: [SYN]
-    ... 0.010 ...
-    c <- s: [SYN, ACK]
-    ... 0.020 ...
-    c -> s: [ACK]
-    ... 0.020 ...
-    c -> s: TLSv1 Client Hello
-    ... 0.030 ...
-    c <- s: [ACK]
-    ... 0.037 ...
-    c <- s: Server Hello, Certificate, Server Key Exchange, Server Hello Done
-    ... 0.048 ...
-    c -> s: Client Key Exchange, Change Cipher Spec, Finished
-    ... 0.058 ...
-    c <- s: New Session Ticket, Change Cipher Spec, Finished
-    ... 0.069 ...
-    c -> s: Application Data, Application Data
-    ... 0.079 ...
-    c <- s: Application Data, Application Data
-    c <- s: Alert: Close Notify
-    ... 0.089 ...
-    c -> s: Alert: Close Notify
-    c -> s: [FIN, ACK]
-    ... 0.099 ...
-    c <- s: [FIN, ACK]
+![TLS-1.2 Full Handshake](/images/tls-1.2-fullhandshake.svg)
+
 
 *Note*: Between the `[ACK]` of the clients `Hello` the server spends ~8ms
 generating the `Server Hello`.
@@ -130,30 +88,7 @@ generating the `Server Hello`.
 
 TLS 1.3 improves full handshake to require one roundtrip less.
 
-    ... 0.000 ...
-    c -> s: [SYN]
-    ... 0.010 ...
-    c <- s: [SYN, ACK]
-    ... 0.020 ...
-    c -> s: [ACK]
-    c -> s: Client Hello
-    ... 0.030 ...
-    c <- s: [ACK]
-    ... 0.038 ...
-    c <- s: Server Hello, Change Cipher Spec, ...
-    ... 0.049 ...
-    c -> s: Change Cipher Spec, Finished
-    c -> s: PING
-    ... 0.059 ...
-    c <- s: New Session Ticket
-    c <- s: New Session Ticket
-    c <- s: PONG
-    c <- s: Alert: Close Notify
-    ... 0.069 ...
-    c -> s: Alert: Close Notify
-    c -> s: [FIN, ACK]
-    ... 0.079 ...
-    c <- s: [FIN, ACK]
+![TLS-1.3 Full Handshake](/images/tls-1.3-fullhandshake.svg)
 
 ### TLS 1.3 - Session Resumption
 

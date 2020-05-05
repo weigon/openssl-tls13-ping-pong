@@ -1,0 +1,22 @@
+@startuml
+participant "Client" as c
+participant "Server" as s
+== TCP handshake ==
+c -> s: [SYN]
+c <- s: [SYN, ACK]
+c -> s: [ACK]
+== TLS handshake ==
+c -> s: Client Hello
+c <- s: Server Hello, Change Cipher Spec, ...
+c -> s: Change Cipher Spec, Finished
+c -> s: PING
+c <- s: New Session Ticket
+c <- s: New Session Ticket
+c <- s: PONG
+== TLS shutdown ==
+c <- s: Alert: Close Notify
+c -> s: Alert: Close Notify
+== TCP shutdown ==
+c -> s: [FIN, ACK]
+c <- s: [FIN, ACK]
+@enduml
