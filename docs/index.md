@@ -80,7 +80,6 @@ For example, a full TLS 1.3 handshake looks like:
 
 ![TLS-1.2 Full Handshake](/images/tls-1.2-fullhandshake.svg)
 
-
 *Note*: Between the `[ACK]` of the clients `Hello` the server spends ~8ms
 generating the `Server Hello`.
 
@@ -110,26 +109,7 @@ TLS 1.3 supports the sending Application Data in the Client hello packet
 
 The packet flow:
 
-    ... 0.000 ...
-    c -> s: [SYN]
-    ... 0.010 ...
-    c <- s: [SYN, ACK]
-    ... 0.020 ...
-    c -> s: [ACK]
-    c -> s: Client Hello, Change Cipher Spec, PING
-    ... 0.031 ...
-    c <- s: Server Hello, Change Cipher Spec, Finished
-    ... 0.042 ...
-    c -> s: End of Early Data, Finished
-    ... 0.052 ...
-    c <- s: New Session Ticket
-    c <- s: PONG
-    c <- s: Alert: Close Notify
-    ... 0.062 ...
-    c -> s: Alert: Close Notify
-    c -> s: [FIN, ACK]
-    ... 0.072 ...
-    c <- s: [FIN, ACK]
+![TLS-1.3 0-RTT](/images/tls-1.3-early-data.svg)
 
 ## TCP Fast Open
 
@@ -141,12 +121,7 @@ If
 
 it can send data in the first packet of the TCP handshake:
 
-    ... 0.000 ...
-    c -> s: [SYN] + Client Data
-    ... 0.010 ...
-    c <- s: [SYN, ACK]
-    ... 0.020 ...
-    c -> s: [ACK]
+![TLS-1.3 0-RTT](/images/tcp-fast-open.svg)
 
 which allows the server to send a response earlier.
 
@@ -154,27 +129,7 @@ which allows the server to send a response earlier.
 
 TCP Fast Open and TLS 1.3 can be combined
 
-    ... 0.000 ...
-    c -> s: [SYN] + Client-Hello
-    ... 0.010 ...
-    c <- s: [SYN,ACK]
-    ... 0.017 ...
-    c <- s: Server Hello, Change Cipher Spec, ...
-    ... 0.019 ...
-    c -> s: [ACK]
-    ... 0.029 ...
-    c -> s: Change Cipher Spec, Finished
-    c -> s: PING
-    ... 0.039 ...
-    c <- s: New Session Ticket
-    c <- s: New Session Ticket
-    c <- s: PONG
-    c <- s: Alert: Close Notify
-    ... 0.049 ...
-    c -> s: Alert: Close Notify
-    c -> s: [FIN,ACK]
-    ... 0.059 ...
-    c <- s: [FIN,ACK]
+![TLS-1.3 0-RTT + TCP Fast Open](/images/tls-1.3-fullhandshake-tfo.svg)
 
 ### TLS 1.3 Session Resumption + TCP Fast Open
 
@@ -184,25 +139,26 @@ TCP Fast Open and TLS 1.3 can be combined
 
 TCP Fast Open and TLS 1.3 can be combined
 
-    ... 0.000 ...
-    c -> s: [SYN] + Client-Hello, Change Cipher Spec, PING
-    ... 0.010 ...
-    c <- s: [SYN, ACK]
-    ... 0.011 ...
-    c <- s: Server Hello, Change Cipher Spec, Finished
-    ... 0.019 ...
-    c -> s: [ACK]
-    ... 0.022 ...
-    c -> s: End of Early Data, Finished
-    ... 0.032 ...
-    c <- s: New Session Ticket
-    c <- s: PONG
-    c <- s: Alert: Close Notify
-    ... 0.042 ...
-    c -> s: Alert: Close Notify
-    c -> s: [FIN]
-    ... 0.052 ...
-    c <- s: [FIN]
+![... 0.000 ...
+c -> s: [SYN] + Client-Hello, Change Cipher Spec, PING
+... 0.010 ...
+c <- s: [SYN, ACK]
+... 0.011 ...
+c <- s: Server Hello, Change Cipher Spec, Finished
+... 0.019 ...
+c -> s: [ACK]
+... 0.022 ...
+c -> s: End of Early Data, Finished
+... 0.032 ...
+c <- s: New Session Ticket
+c <- s: PONG
+c <- s: Alert: Close Notify
+... 0.042 ...
+c -> s: Alert: Close Notify
+c -> s: [FIN]
+... 0.052 ...
+c <- s: [FIN]
+](/images/tls-1.3-early-data-tfo.svg)
 
 ### Cost of TLS handshake
 

@@ -1,0 +1,10 @@
+@startuml
+participant "Client" as c
+participant "Server" as s
+... 0.000 ...
+c -> s: [SYN] + Client Data
+... 0.010 ...
+c <- s: [SYN, ACK]
+... 0.020 ...
+c -> s: [ACK]
+@enduml
