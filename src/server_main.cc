@@ -47,6 +47,7 @@
 #include "resolver.h"
 #include "sock_err.h"
 #include "sock_opt.h"
+#include "ssl_err.h"
 
 // TCP FastOpen is not enabled by default on Linux.
 //
@@ -75,8 +76,9 @@ int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
 
   std::map<std::string, std::string> args{
-      {"hostname", "127.0.0.1"}, {"port", "3308"}, {"data", "PONG"},
-      {"verbosity", "0"},        {"cmd", "run"},
+      {"hostname", "127.0.0.1"}, {"port", "3308"},     {"data", "PONG"},
+      {"verbosity", "0"},        {"cmd", "run"},       {"curves", ""},
+      {"key", "key.pem"},        {"cert", "cert.pem"},
   };
   for (int ndx = 1; ndx < argc; ++ndx) {
     std::string arg(argv[ndx]);
@@ -132,25 +134,37 @@ int main(int argc, char **argv) {
       SSL_CTX_new(TLS_server_method()), &SSL_CTX_free);
   SSL_CTX *ssl_ctx = ssl_ctx_mem.get();
 
+  // set DH group to enable forward secrecy
   auto dh_2048_mem =
       std::unique_ptr<DH, void (*)(DH *)>(DH_get_2048_256(), &DH_free);
   DH *dh_2048 = dh_2048_mem.get();
 
-  SSL_CTX_set_tmp_dh(ssl_ctx, dh_2048);
+  {
+    auto ssl_err = SSL_CTX_set_tmp_dh(ssl_ctx, dh_2048);
+    if (ssl_err != 1) {
+      auto ec = last_sslerr_error_code();
+      std::cerr << "ssl-ctx-set-tmp-dh() failed: " << ec.message() << std::endl;
+      return EXIT_FAILURE;
+    }
+  }
 
-  SSL_CTX_set1_groups_list(ssl_ctx, "P-521:P-384:P-256:X25519");
+  {
+    auto arg = args.at("curves");
+    if (!arg.empty()) {
+      SSL_CTX_set1_groups_list(ssl_ctx, arg.c_str());
+    }
+  }
 
-  const char key_pem[] = "key.pem";
-  const char cert_pem[] = "cert.pem";
+  const char *key_pem = args.at("key").c_str();
+  const char *cert_pem = args.at("cert").c_str();
 
   {
     auto ssl_err =
         SSL_CTX_use_PrivateKey_file(ssl_ctx, key_pem, SSL_FILETYPE_PEM);
     if (ssl_err != 1) {
-      std::array<char, 120> errbuf;
-      std::cerr << "use-privatekey-file(" << key_pem << ") failed: "
-                << ERR_error_string(ERR_get_error(), errbuf.data())
-                << std::endl;
+      auto ec = last_sslerr_error_code();
+      std::cerr << "use-privatekey-file(" << key_pem
+                << ") failed: " << ec.message() << std::endl;
       return EXIT_FAILURE;
     }
   }
@@ -159,18 +173,39 @@ int main(int argc, char **argv) {
     auto ssl_err =
         SSL_CTX_use_certificate_file(ssl_ctx, cert_pem, SSL_FILETYPE_PEM);
     if (ssl_err != 1) {
-      std::array<char, 120> errbuf;
-      std::cerr << "use-certificate-file(" << cert_pem << ") failed: "
-                << ERR_error_string(ERR_get_error(), errbuf.data())
-                << std::endl;
-      std::cerr << "ssl: " << ERR_error_string(ERR_get_error(), errbuf.data())
-                << std::endl;
+      auto ec = last_sslerr_error_code();
+      std::cerr << "use-certificate-file(" << cert_pem
+                << ") failed: " << ec.message() << std::endl;
       return EXIT_FAILURE;
     }
   }
 
-  // announce we accept some early data
-  SSL_CTX_set_max_early_data(ssl_ctx, 32);
+  // session-id-context must be unique to the application to avoid false sharing
+  // of session tickets/ids
+  std::array<uint8_t, 4> session_id_context = {0x01, 0x02, 0x03, 0x04};
+  {
+    auto ssl_res = SSL_CTX_set_session_id_context(
+        ssl_ctx, session_id_context.data(), session_id_context.size());
+    if (ssl_res != 1) {
+      auto ec = last_sslerr_error_code();
+
+      std::cerr << "set-session-id-context() failed: " << ec.message()
+                << std::endl;
+
+      return EXIT_FAILURE;
+    }
+  }
+
+  // announce that early data will be accepted accepted
+  {
+    auto ssl_err = SSL_CTX_set_max_early_data(ssl_ctx, 32);
+    if (ssl_err != 1) {
+      // docs don't say that an error-code is added to the error-queue.
+      std::cerr << "set-max-early-data() failed" << std::endl;
+
+      return EXIT_FAILURE;
+    }
+  }
 
   std::error_code ec;
   // prepare the socket.
@@ -254,21 +289,7 @@ int main(int argc, char **argv) {
         auto ssl_res = SSL_read_early_data(ssl, &transfer_buf.front(),
                                            transfer_buf.size(), &transfered);
         if (ssl_res == SSL_READ_EARLY_DATA_ERROR) {
-          switch (SSL_get_error(ssl, ssl_res)) {
-            case SSL_ERROR_NONE:
-              std::cerr << "none" << std::endl;
-              break;
-            case SSL_ERROR_SSL: {
-              std::array<char, 120> errbuf;
-              std::cerr << __LINE__ << ": ssl: "
-                        << ERR_error_string(ERR_get_error(), errbuf.data())
-                        << std::endl;
-              break;
-            }
-            default:
-              std::cerr << __LINE__ << ": ???" << std::endl;
-              break;
-          }
+          ec = last_ssl_error_code(ssl, ssl_res);
           break;
         } else if (ssl_res == SSL_READ_EARLY_DATA_FINISH) {
           transfer_buf.resize(transfered);
@@ -287,25 +308,16 @@ int main(int argc, char **argv) {
       }
     } while (true);
 
+    // some error happened
+    if (ec) break;
+
     {
       // accept the TLS connection
       auto ssl_res = SSL_accept(ssl);
       if (ssl_res != 1) {
-        switch (SSL_get_error(ssl, ssl_res)) {
-          case SSL_ERROR_NONE:
-            std::cerr << "none" << std::endl;
-            break;
-          case SSL_ERROR_SYSCALL:
-            std::cerr << last_error_code().message() << std::endl;
-            break;
-          case SSL_ERROR_SSL: {
-            std::array<char, 120> errbuf;
-            std::cerr << "ssl: "
-                      << ERR_error_string(ERR_get_error(), errbuf.data())
-                      << std::endl;
-            break;
-          }
-        }
+        ec = last_ssl_error_code(ssl, ssl_res);
+
+        std::cerr << "SSL_accept() failed: " << ec.message() << std::endl;
 
         // drop this connection and accept the next one
         continue;
@@ -322,18 +334,9 @@ int main(int argc, char **argv) {
       auto ssl_res = SSL_read_ex(ssl, &transfer_buf.front(),
                                  transfer_buf.size(), &transfered);
       if (ssl_res == 0) {
-        switch (SSL_get_error(ssl, ssl_res)) {
-          case SSL_ERROR_NONE:
-            std::cerr << "none" << std::endl;
-            break;
-          case SSL_ERROR_SSL: {
-            std::array<char, 120> errbuf;
-            std::cerr << __LINE__ << ": ssl: "
-                      << ERR_error_string(ERR_get_error(), errbuf.data())
-                      << std::endl;
-            break;
-          }
-        }
+        ec = last_ssl_error_code(ssl, ssl_res);
+
+        std::cerr << "SSL_read_ex() failed: " << ec.message() << std::endl;
       } else if (ssl_res == 1) {
         transfer_buf.resize(transfered);
         if (verbosity > 1) {
@@ -363,10 +366,9 @@ int main(int argc, char **argv) {
           std::cout << "s -> c: shutdown finished" << std::endl;
         }
       } else if (ssl_res == -1) {
-        std::array<char, 120> errbuf;
-        std::cerr << __LINE__ << ": ssl: "
-                  << ERR_error_string(ERR_get_error(), errbuf.data())
-                  << std::endl;
+        ec = last_sslerr_error_code();
+
+        std::cerr << __LINE__ << ": ssl: " << ec.message() << std::endl;
       }
     }
 
@@ -387,10 +389,9 @@ int main(int argc, char **argv) {
           std::cout << "s -> c: shutdown finished" << std::endl;
         }
       } else if (ssl_res == -1) {
-        std::array<char, 120> errbuf;
-        std::cerr << __LINE__ << ": ssl: "
-                  << ERR_error_string(ERR_get_error(), errbuf.data())
-                  << std::endl;
+        ec = last_sslerr_error_code();
+
+        std::cerr << __LINE__ << ": ssl: " << ec.message() << std::endl;
       }
     }
     if (verbosity > 1) {

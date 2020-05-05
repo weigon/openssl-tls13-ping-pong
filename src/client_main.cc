@@ -57,6 +57,7 @@
 #include "resolver.h"
 #include "sock_err.h"
 #include "sock_opt.h"
+#include "ssl_err.h"
 
 // remember the last session to assign it to another connection to the same host
 std::unique_ptr<SSL_SESSION, void (*)(SSL_SESSION *)> last_session(
@@ -111,6 +112,8 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     return ec;
   }
 
+  // using a FD class which closes the FD automatically at destruction and can't
+  // be copied
   FileDescriptor sock;
 
   sock.assign(socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol));
@@ -165,20 +168,9 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     auto ssl_res = SSL_write_early_data(ssl, transfer_buf.data(),
                                         transfer_buf.size(), &written);
     if (ssl_res != 1) {
-      switch (SSL_get_error(ssl, ssl_res)) {
-        case SSL_ERROR_NONE:
-          std::cerr << __LINE__ << ": none" << std::endl;
-          break;
-        case SSL_ERROR_SYSCALL:
-          return last_error_code();
-        case SSL_ERROR_SSL: {
-          std::array<char, 120> errbuf;
-          std::cerr << "ssl: "
-                    << ERR_error_string(ERR_get_error(), errbuf.data())
-                    << std::endl;
-          break;
-        }
-      }
+      auto ec = last_ssl_error_code(ssl, ssl_res);
+
+      return ec;
     } else {
       std::cerr << "c -> s: " << transfer_buf.data() << std::endl;
     }
@@ -187,28 +179,15 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
   {
     auto ssl_res = SSL_connect(ssl);
     if (ssl_res != 1) {
-      switch (SSL_get_error(ssl, ssl_res)) {
-        case SSL_ERROR_NONE:
-          std::cerr << __LINE__ << ": none" << std::endl;
-          break;
-        case SSL_ERROR_SSL: {
-          std::array<char, 120> errbuf;
-          std::cerr << __LINE__ << ": ssl: "
-                    << ERR_error_string(ERR_get_error(), errbuf.data())
-                    << std::endl;
+      auto ec = last_ssl_error_code(ssl, ssl_res);
 
-          break;
-        }
-        case SSL_ERROR_SYSCALL:
-          return last_error_code();
-        default:
-          std::cerr << __LINE__ << ": ??? " << ssl_res << std::endl;
-          break;
-      }
+      return ec;
     } else if (ssl_res > 0) {
       if (verbosity > 1) {
         std::cout << "c -> s: "
-                  << "// established: " << SSL_get_version(ssl) << std::endl;
+                  << "// established: " << SSL_get_version(ssl) << " using "
+                  << SSL_get_cipher(ssl) << " session reused? "
+                  << (SSL_session_reused(ssl) ? "yes" : "no") << std::endl;
       }
     }
   }
@@ -216,24 +195,9 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
   if (SSL_get_early_data_status(ssl) != SSL_EARLY_DATA_ACCEPTED) {
     auto ssl_res = SSL_write(ssl, transfer_buf.data(), transfer_buf.size());
     if (ssl_res < 0) {
-      switch (SSL_get_error(ssl, ssl_res)) {
-        case SSL_ERROR_NONE:
-          std::cerr << __LINE__ << ": none" << std::endl;
-          break;
-        case SSL_ERROR_SSL: {
-          std::array<char, 120> errbuf;
-          std::cerr << __LINE__ << ": ssl: "
-                    << ERR_error_string(ERR_get_error(), errbuf.data())
-                    << std::endl;
+      auto ec = last_ssl_error_code(ssl, ssl_res);
 
-          break;
-        }
-        case SSL_ERROR_SYSCALL:
-          return last_error_code();
-        default:
-          std::cerr << __LINE__ << ": ??? " << ssl_res << std::endl;
-          break;
-      }
+      return ec;
     } else if (ssl_res > 0) {
       if (verbosity > 1) {
         std::cout << "c -> s: " << transfer_buf.data() << std::endl;
@@ -248,18 +212,9 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     auto ssl_res = SSL_read_ex(ssl, &transfer_buf.front(), transfer_buf.size(),
                                &transfered);
     if (ssl_res <= 0) {
-      switch (SSL_get_error(ssl, ssl_res)) {
-        case SSL_ERROR_NONE:
-          std::cerr << __LINE__ << ": none" << std::endl;
-          break;
-        case SSL_ERROR_SSL: {
-          std::array<char, 120> errbuf;
-          std::cerr << __LINE__ << ": ssl: "
-                    << ERR_error_string(ERR_get_error(), errbuf.data())
-                    << std::endl;
-          break;
-        }
-      }
+      auto ec = last_ssl_error_code(ssl, ssl_res);
+
+      return ec;
     } else {
       transfer_buf.resize(transfered);
       if (verbosity > 1) {
@@ -283,10 +238,11 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
         std::cout << "c -> s: shutdown finished" << std::endl;
       }
     } else if (ssl_res == -1) {
-      std::array<char, 120> errbuf;
-      std::cerr << __LINE__
-                << ": ssl: " << ERR_error_string(ERR_get_error(), errbuf.data())
-                << std::endl;
+      auto ec = last_sslerr_error_code();
+
+      std::cerr << __LINE__ << ": ssl: " << ec.message() << std::endl;
+
+      return ec;
     }
   }
 
@@ -310,10 +266,9 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
         std::cout << "c -> s: shutdown finished" << std::endl;
       }
     } else if (ssl_res == -1) {
-      std::array<char, 120> errbuf;
-      std::cerr << __LINE__
-                << ": ssl: " << ERR_error_string(ERR_get_error(), errbuf.data())
-                << std::endl;
+      std::cerr << __LINE__ << ": ssl: " << ec.message() << std::endl;
+
+      return ec;
     }
   }
 
@@ -337,6 +292,7 @@ int main(int argc, char **argv) {
       {"rounds", "1"},
       {"verbosity", "0"},
       {"cmd", "run"},
+      {"curves", ""},
   };
   for (int ndx = 1; ndx < argc; ++ndx) {
     std::string arg(argv[ndx]);
@@ -414,7 +370,12 @@ int main(int argc, char **argv) {
   SSL_CTX_set_tmp_dh(ssl_ctx, dh_2048);
 
   // set the elliptic curves lists
-  SSL_CTX_set1_groups_list(ssl_ctx, "P-521:P-384:P-256:X25519");
+  {
+    auto arg = args.at("curves");
+    if (!arg.empty()) {
+      SSL_CTX_set1_groups_list(ssl_ctx, arg.c_str());
+    }
+  }
 
   // enable the session cache to allow session resumption
   SSL_CTX_set_session_cache_mode(
