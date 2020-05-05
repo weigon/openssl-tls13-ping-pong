@@ -53,7 +53,7 @@ over a network with a round-trip-time (RTT) of
 #### RTT 2ms
 
 | TLS Version       | Full Handshake | Full Handshake + TFO | Resumption | Resumption + TFO |
-| ----------------- | --------------:| --------------------:| ----------:| --------- ------:|
+| ----------------- | --------------:| --------------------:| ----------:| ----------------:|
 | TLS 1.0, 1.1, 1.2 |        15.26ms |              13.67ms |    11.51ms |           9.93ms |
 | TLS 1.3           |        13.07ms |              11.30ms |     8.28ms |           6.27ms |
 
@@ -274,25 +274,14 @@ TCP Fast Open and TLS 1.3 can be combined
 Tracking the time spent of the TCP/TLS handshake over the loopback interface
 (10us latency) allows to measure the duration of each stage.
 
-TLS 1.3 full handshake:
+| stage          | full handshake | resumption |
+| -------------- | --------------:| ----------:|
+| client hello   |          0.4ms |      0.4ms |
+| server hello   |      **6.0ms** |      0.5ms |
+| client finish  |      **1.0ms** |      0.7ms |
+| data + latency |          0.1ms |      0.1ms |
+| **TOTAL**      |          7.5ms |      1.7ms |
 
-| stage          | duration |
-| -------------- | --------:|
-| client hello   |    0.4ms |
-| server hello   |    6.0ms |
-| client finish  |    1.0ms |
-| data + latency |    0.1ms |
-| **TOTAL**      |    7.5ms |
-
-TLS 1.3 session resumption:
-
-| stage          | duration |
-| -------------- | --------:|
-| client hello   |    0.4ms |
-| server hello   |    0.5ms |
-| client finish  |    0.7ms |
-| data + latency |    0.1ms |
-| **TOTAL**      |    1.7ms |
 
 # API usage
 
