@@ -21,6 +21,7 @@
  *
  * SPDX-License-Identifier: MIT
  */
+
 #include <array>
 #include <chrono>
 #include <csignal>   // signal
@@ -30,16 +31,25 @@
 #include <iostream>  // cerr
 #include <map>
 #include <memory>        // unique_ptr
+#include <string>        // stol
 #include <system_error>  // error_code
 #include <vector>
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <winsock2.h>
+
+#include <MSWSock.h>  // LPCONNECTEX
+#else
 #include <netdb.h>        // getaddrinfo
 #include <netinet/in.h>   // sockaddr_in
 #include <netinet/tcp.h>  // SOL_TCP
 #include <openssl/tls1.h>
 #include <sys/socket.h>  // SOL_SOCKET
 #include <unistd.h>      // close
+#endif
 
+#include <openssl/bio.h>  // BIO_new_meth
 #include <openssl/err.h>  // ERR_get_error
 #include <openssl/ssl.h>  // SSL_CTX_new
 
@@ -47,7 +57,8 @@
 #error at least openssl 1.1.1 is required.
 #endif
 
-#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__) || \
+    defined(_WIN32)
 // we are good to go.
 #else
 #error unsupported OS
@@ -77,6 +88,25 @@ static int new_session_cb(SSL *s, SSL_SESSION *sess) {
 
   return 1;
 }
+
+template <class T>
+class Deleter;
+
+template <>
+class Deleter<BIO> {
+ public:
+  void operator()(BIO *b) { BIO_free(b); }
+};
+
+template <>
+class Deleter<BIO_METHOD> {
+ public:
+  void operator()(BIO_METHOD *b) { BIO_meth_free(b); }
+};
+
+#if defined(_WIN32)
+LPFN_CONNECTEX connect_ex_ptr = nullptr;
+#endif
 
 /**
  * run one connection.
@@ -128,14 +158,21 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     return ec;
   }
 
+  bool need_to_connect = false;
+
   if (with_fast_open) {
-#if defined(__FreeBSD__) || defined(__linux__)
+#if defined(__FreeBSD__) || \
+    (defined(__linux__) && defined(TCP_FASTOPEN_CONNECT))
     set_tcp_fast_open_client(sock.native_handle(), 1, ec);
     if (ec) return ec;
 
     if (0 != connect(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
       return last_error_code();
     }
+#elif defined(__linux__) && !defined(TCP_FASTOPEN_CONNECT)
+    // we didn't have TCP_FASTOPEN_CONNECT and need to fallback to sendto(...,
+    // MSG_FASTOPEN)
+    need_to_connect = true;
 #elif defined(__APPLE__)
     sa_endpoints_t endpoints{};
 
@@ -147,6 +184,18 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
                       NULL, 0, NULL, NULL)) {
       return last_error_code();
     }
+#elif defined(_WIN32)
+    DWORD numBytes{};
+    GUID guid = WSAID_CONNECTEX;
+    if (WSAIoctl(sock.native_handle(), SIO_GET_EXTENSION_FUNCTION_POINTER,
+                 (void *)&guid, sizeof(guid), (void *)&connect_ex_ptr,
+                 sizeof(connect_ex_ptr), &numBytes, NULL,
+                 NULL) == SOCKET_ERROR) {
+      return last_error_code();
+    }
+    need_to_connect = true;
+#else
+    return make_error_code(std::errc::operation_not_supported);
 #endif
   } else {
     if (0 != connect(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
@@ -154,7 +203,104 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
     }
   }
 
-  SSL_set_fd(ssl, sock.native_handle());
+  std::unique_ptr<BIO, Deleter<BIO>> bio_socket_mem(BIO_new(BIO_s_socket()));
+
+  std::unique_ptr<BIO_METHOD, Deleter<BIO_METHOD>> bio_m_fastopen(
+      BIO_meth_new(BIO_TYPE_FILTER, "fastopen_linux_pre4"));
+
+  BIO_meth_set_read(bio_m_fastopen.get(), [](BIO *b, char *buf, int len) {
+    if (BIO_next(b) == nullptr) {
+      return 0;
+    }
+
+    auto res = BIO_read(BIO_next(b), buf, len);
+
+    return res;
+  });
+  BIO_meth_set_write(
+      bio_m_fastopen.get(), [](BIO *b, const char *buf, int len) -> int {
+        if (BIO_next(b) == nullptr) {
+          return 0;
+        }
+
+        if (auto *ai = reinterpret_cast<addrinfo *>(BIO_get_data(b))) {
+          int res = -1;
+#if defined(__linux__) && defined(MSG_FASTOPEN)
+          res = ::sendto(BIO_get_fd(b, nullptr), buf, len, MSG_FASTOPEN,
+                         ai->ai_addr, ai->ai_addrlen);
+#elif defined(_WIN32)
+          DWORD ret;
+          OVERLAPPED overlapped{};
+          if (connect_ex_ptr(BIO_get_fd(b, nullptr), ai->ai_addr,
+                             ai->ai_addrlen,
+                             reinterpret_cast<void *>(const_cast<char *>(buf)),
+                             len, &ret, &overlapped) != 0) {
+            res = ret;
+          } else {
+            errno = WSAGetLastError();
+          }
+#else
+          errno = EOPNOTSUPP;
+#endif
+
+          BIO_set_data(b, nullptr);
+
+          return res;
+        }
+
+        auto res = BIO_write(BIO_next(b), buf, len);
+
+        return res;
+      });
+  BIO_meth_set_ctrl(bio_m_fastopen.get(),
+                    [](BIO *b, int cmd, long num, void *ptr) -> long {
+                      if (BIO_next(b) == nullptr) {
+                        return 0;
+                      }
+
+                      BIO_clear_retry_flags(b);
+                      auto res = BIO_ctrl(BIO_next(b), cmd, num, ptr);
+                      BIO_copy_next_retry(b);
+
+                      return res;
+                    });
+  BIO_meth_set_create(bio_m_fastopen.get(), [](BIO *b) {
+    BIO_set_init(b, 1);
+
+    return 1;
+  });
+  BIO_meth_set_destroy(bio_m_fastopen.get(), [](BIO *b) {
+    BIO_set_init(b, 0);
+
+    return 1;
+  });
+  BIO_meth_set_callback_ctrl(bio_m_fastopen.get(),
+                             [](BIO *b, int cmd, BIO_info_cb *fp) -> long {
+                               if (BIO_next(b) == nullptr) {
+                                 return 0;
+                               }
+
+                               return BIO_callback_ctrl(BIO_next(b), cmd, fp);
+                             });
+
+  std::unique_ptr<BIO, Deleter<BIO>> bio_socket_forwarder_mem(
+      BIO_new(bio_m_fastopen.release()));
+
+  BIO_push(bio_socket_forwarder_mem.get(), bio_socket_mem.release());
+
+  // SSL takes ownership of the pointer
+  BIO *bio_socket_forwarder = bio_socket_forwarder_mem.release();
+
+  if (with_fast_open && need_to_connect) {
+    // fast_open is requested, but we don't have connected yet. Let the
+    // bio-forwarded do it for us on the first connect
+    BIO_set_data(bio_socket_forwarder, ai.get());
+  }
+
+  BIO_set_fd(bio_socket_forwarder, sock.native_handle(), BIO_NOCLOSE);
+
+  SSL_set_bio(ssl, bio_socket_forwarder, bio_socket_forwarder);
+
   if (last_session && with_session_resumption) {
     SSL_set_session(ssl, last_session.release());
   }
@@ -249,7 +395,11 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
   if (verbosity > 1) {
     std::cout << "c -x s: // shutdown" << std::endl;
   }
+#if defined(_WIN32)
+  shutdown(sock.native_handle(), SD_SEND);
+#else
   shutdown(sock.native_handle(), SHUT_WR);
+#endif
 
   {
     auto ssl_res = SSL_shutdown(ssl);
@@ -279,7 +429,16 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
 }
 
 int main(int argc, char **argv) {
+#if defined(_WIN32)
+  WSADATA wsadata;
+  if (auto err = WSAStartup(MAKEWORD(2, 2), &wsadata)) {
+    std::cerr << "WSAStartup() failed with " << err << std::endl;
+
+    return EXIT_FAILURE;
+  }
+#else
   signal(SIGPIPE, SIG_IGN);
+#endif
 
   std::map<std::string, std::string> args{
       {"hostname", "127.0.0.1"},
@@ -412,7 +571,7 @@ int main(int argc, char **argv) {
     auto ec = do_one(ssl_ctx, hostname, service, false, false, false, data,
                      verbosity);
     if (ec) {
-      std::cerr << ec.message() << std::endl;
+      std::cerr << ec << " " << ec.message() << std::endl;
       return EXIT_FAILURE;
     }
   }
@@ -422,7 +581,7 @@ int main(int argc, char **argv) {
     auto ec = do_one(ssl_ctx, hostname, service, tcp_fast_open, tls_resumption,
                      tls_early_data, data, verbosity);
     if (ec) {
-      std::cerr << ec.message() << std::endl;
+      std::cerr << ec << " " << ec.message() << std::endl;
       return EXIT_FAILURE;
     }
   }

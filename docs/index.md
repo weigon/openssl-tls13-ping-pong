@@ -274,6 +274,21 @@ $ sysctl net.inet.tcp.fastopen
 3
 ```
 
+#### Windows
+
+```sh
+> netsh interface tcp show global
+Querying active state...
+
+TCP Global Parameters
+-----
+...
+Fast Open : disabled
+Fast Open Fallback : disabled
+...
+> netsh interface tcp  set global fastopen=enabled
+```
+
 ### server side support
 
 If the kernel support is enabled, the server application can active

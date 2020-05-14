@@ -21,6 +21,11 @@
 #
 # SPDX-License-Identifier: MIT
 
+
+IF(WIN32)
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DWIN32_LEAN_AND_MEAN")
+ENDIF()
+
 ADD_EXECUTABLE(tls13_ping_pong_client
 	client_main.cc
 	sock_opt.cc
@@ -28,6 +33,9 @@ ADD_EXECUTABLE(tls13_ping_pong_client
 	ssl_err.cc
 	)
 TARGET_LINK_LIBRARIES(tls13_ping_pong_client OpenSSL::SSL OpenSSL::Crypto)
+IF(WIN32)
+  TARGET_LINK_LIBRARIES(tls13_ping_pong_client ws2_32 crypt32)
+ENDIF()
 ADD_EXECUTABLE(tls13_ping_pong_server
 	server_main.cc
 	sock_opt.cc
@@ -35,6 +43,9 @@ ADD_EXECUTABLE(tls13_ping_pong_server
 	ssl_err.cc
 	)
 TARGET_LINK_LIBRARIES(tls13_ping_pong_server OpenSSL::SSL OpenSSL::Crypto)
+IF(WIN32)
+TARGET_LINK_LIBRARIES(tls13_ping_pong_server ws2_32 crypt32)
+ENDIF()
 
 ADD_CUSTOM_COMMAND(
 	OUTPUT key.pem cert.pem

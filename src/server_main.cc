@@ -27,16 +27,21 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <string>
 #include <system_error>
 #include <vector>
 
-#include <arpa/inet.h>
+#if defined(_WIN32)
+#include <windows.h>
+#include <winsock2.h>
+#else
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 
 #include <openssl/bio.h>
 #include <openssl/dh.h>
@@ -72,8 +77,11 @@ volatile int want_shutdown{0};
 static void signal_handler(int sig) { want_shutdown = 1; }
 
 int main(int argc, char **argv) {
+#if defined(_WIN32)
+#else
   // don't signal SIGPIPE on write() to a closed connection
   signal(SIGPIPE, SIG_IGN);
+#endif
 
   std::map<std::string, std::string> args{
       {"hostname", "127.0.0.1"}, {"port", "3308"},     {"data", "PONG"},
@@ -121,11 +129,13 @@ int main(int argc, char **argv) {
   const char *service = args.at("port").c_str();
   const auto verbosity = std::stol(args.at("verbosity"));
 
+#if !defined(_WIN32)
   // allow the interrupt the blocking accept() call with SIGINT, SIGTERM
   struct sigaction action {};
   action.sa_handler = signal_handler;
   sigaction(SIGINT, &action, nullptr);
   sigaction(SIGTERM, &action, nullptr);
+#endif
 
   SSL_library_init();
   SSL_load_error_strings();
@@ -372,7 +382,11 @@ int main(int argc, char **argv) {
       }
     }
 
+#if defined(_WIN32)
+    shutdown(sock.native_handle(), SD_SEND);
+#else
     shutdown(sock.native_handle(), SHUT_WR);
+#endif
 
     {
       auto ssl_res = SSL_shutdown(ssl);

@@ -1,4 +1,9 @@
-#include <netdb.h>
+#if defined(_WIN32)
+#include <windows.h>
+#include <winsock2.h>
+#else
+#include <netdb.h>  // addrinfo
+#endif
 #include <system_error>
 
 #include "resolver.h"
@@ -23,11 +28,15 @@ std::unique_ptr<addrinfo, void (*)(addrinfo *)> address_info(
   addrinfo *ai_raw{};
   auto ai_res = ::getaddrinfo(hostname, service, hints, &ai_raw);
   if (ai_res != 0) {
+#if defined(EAI_SYSTEM)
     if (ai_res == EAI_SYSTEM) {
       ec = last_error_code();
     } else {
       ec = std::error_code(ai_res, ResolverCategory());
     }
+#else
+    ec = std::error_code(ai_res, ResolverCategory());
+#endif
 
     // ai_raw should be a nullptr now.
   }

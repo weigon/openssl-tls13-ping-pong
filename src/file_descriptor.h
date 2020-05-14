@@ -25,8 +25,13 @@
 #ifndef FILE_DESCRIPTOR_INCLUDED
 #define FILE_DESCRIPTOR_INCLUDED
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <winsock2.h>
+#else
 #include <unistd.h>  // close
-#include <utility>   // exchange
+#endif
+#include <utility>  // exchange
 
 class FileDescriptor {
  public:
@@ -58,7 +63,11 @@ class FileDescriptor {
 
   void close() {
     if (is_open()) {
+#if defined(_WIN32)
+      ::closesocket(fd_);
+#else
       ::close(fd_);
+#endif
       fd_ = kInvalidHandle;
     }
   }
