@@ -25,13 +25,21 @@
 #ifndef FILE_DESCRIPTOR_INCLUDED
 #define FILE_DESCRIPTOR_INCLUDED
 
+#ifndef WIN32
 #include <unistd.h>  // close
-#include <utility>   // exchange
+#else
+#include <winsock2.h>  //clossocket
+#endif
+#include <utility>  // exchange
 
 class FileDescriptor {
  public:
+#ifndef WIN32
   using native_handle_type = int;
-  const native_handle_type kInvalidHandle{-1};
+#else
+  using native_handle_type = SOCKET;
+#endif
+  const native_handle_type kInvalidHandle = -1;
 
   FileDescriptor() = default;
 
@@ -58,7 +66,12 @@ class FileDescriptor {
 
   void close() {
     if (is_open()) {
+#ifndef WIN32
       ::close(fd_);
+#else
+      closesocket(fd_);
+#endif
+
       fd_ = kInvalidHandle;
     }
   }

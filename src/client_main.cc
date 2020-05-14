@@ -29,16 +29,23 @@
 #include <ios>       // ios_base
 #include <iostream>  // cerr
 #include <map>
-#include <memory>        // unique_ptr
+#include <memory>  // unique_ptr
+#include <string>
 #include <system_error>  // error_code
 #include <vector>
-
+#ifndef WIN32
 #include <netdb.h>        // getaddrinfo
 #include <netinet/in.h>   // sockaddr_in
 #include <netinet/tcp.h>  // SOL_TCP
 #include <openssl/tls1.h>
 #include <sys/socket.h>  // SOL_SOCKET
 #include <unistd.h>      // close
+#else
+#include <signal.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#endif
 
 #include <openssl/err.h>  // ERR_get_error
 #include <openssl/ssl.h>  // SSL_CTX_new
@@ -49,6 +56,8 @@
 
 #if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
 // we are good to go.
+#elif WIN32
+#define SHUT_WR SD_SEND
 #else
 #error unsupported OS
 #endif
@@ -279,7 +288,17 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
 }
 
 int main(int argc, char **argv) {
+#ifndef WIN32
   signal(SIGPIPE, SIG_IGN);
+#else
+  WSADATA wsaData;
+  // Initialize Winsock
+  auto iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+  if (iResult != 0) {
+    printf("WSAStartup failed with error: %d\n", iResult);
+    return EXIT_FAILURE;
+  }
+#endif
 
   std::map<std::string, std::string> args{
       {"hostname", "127.0.0.1"},
@@ -302,7 +321,7 @@ int main(int argc, char **argv) {
 
       auto eq_pos = arg.find('=');
       if (eq_pos == std::string::npos) {
-        return EXIT_FAILURE;
+        return cleanup(EXIT_FAILURE);
       }
       auto key = arg.substr(0, eq_pos);
       auto value = arg.substr(eq_pos + 1);
@@ -310,7 +329,7 @@ int main(int argc, char **argv) {
       auto it = args.find(key);
       if (it == args.end()) {
         std::cerr << "unsupported option: " << key << std::endl;
-        return EXIT_FAILURE;
+        return cleanup(EXIT_FAILURE);
       }
 
       it->second = value;
@@ -319,16 +338,16 @@ int main(int argc, char **argv) {
         args.at("cmd") = "help";
       } else {
         std::cerr << "unsupport arg: " << arg << std::endl;
-        return EXIT_FAILURE;
+        return cleanup(EXIT_FAILURE);
       }
     } else {
       std::cerr << "unsupport arg: " << arg << std::endl;
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
 
   if (args.at("cmd") == "help") {
-    return EXIT_SUCCESS;
+    return cleanup(EXIT_SUCCESS);
   }
 
   const char *hostname = args.at("hostname").c_str();
@@ -348,7 +367,7 @@ int main(int argc, char **argv) {
       max_proto_version = TLS1_3_VERSION;
     } else {
       std::cerr << "unknown max SSL protocol version: " << arg << std::endl;
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
 
@@ -413,7 +432,7 @@ int main(int argc, char **argv) {
                      verbosity);
     if (ec) {
       std::cerr << ec.message() << std::endl;
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
 
@@ -423,7 +442,7 @@ int main(int argc, char **argv) {
                      tls_early_data, data, verbosity);
     if (ec) {
       std::cerr << ec.message() << std::endl;
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
 
@@ -434,7 +453,7 @@ int main(int argc, char **argv) {
                      tls_early_data, data, verbosity);
     if (ec) {
       std::cerr << ec.message() << std::endl;
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
   auto now = std::chrono::system_clock::now();
@@ -445,5 +464,5 @@ int main(int argc, char **argv) {
   std::cout << "runtime: " << ms << "ms" << std::endl;
   std::cout << "round-time: " << ms / rounds << "ms" << std::endl;
 
-  return EXIT_SUCCESS;
+  return cleanup(EXIT_SUCCESS);
 }

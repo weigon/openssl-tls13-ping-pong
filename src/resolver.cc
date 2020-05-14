@@ -1,8 +1,13 @@
-#include <netdb.h>
-#include <system_error>
+#ifdef WIN32
+#include <ws2tcpip.h>
+#endif
 
 #include "resolver.h"
 #include "sock_err.h"
+
+#ifdef WIN32
+#define EAI_SYSTEM -11
+#endif
 
 const std::error_category &ResolverCategory() noexcept {
   class category_impl : public std::error_category {

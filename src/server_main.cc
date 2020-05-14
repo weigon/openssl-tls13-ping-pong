@@ -27,9 +27,11 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <string>
 #include <system_error>
 #include <vector>
 
+#ifndef WIN32
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <netinet/in.h>
@@ -37,6 +39,12 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#else
+#include <signal.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#endif
 
 #include <openssl/bio.h>
 #include <openssl/dh.h>
@@ -72,9 +80,20 @@ volatile int want_shutdown{0};
 static void signal_handler(int sig) { want_shutdown = 1; }
 
 int main(int argc, char **argv) {
+#ifndef WIN32
   // don't signal SIGPIPE on write() to a closed connection
   signal(SIGPIPE, SIG_IGN);
-
+#else
+  #define SHUT_WR SD_SEND
+  WSADATA wsaData;
+  // Initialize Winsock
+  auto iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
+  if (iResult != 0) {
+    printf("WSAStartup failed with error: %d\n", iResult);
+    return EXIT_FAILURE;
+  }
+  SOCKET ConnectSocket = INVALID_SOCKET;
+#endif
   std::map<std::string, std::string> args{
       {"hostname", "127.0.0.1"}, {"port", "3308"},     {"data", "PONG"},
       {"verbosity", "0"},        {"cmd", "run"},       {"curves", ""},
@@ -114,18 +133,23 @@ int main(int argc, char **argv) {
   }
 
   if (args.at("cmd") == "help") {
-    return EXIT_SUCCESS;
+    return cleanup(EXIT_SUCCESS);
   }
 
   const char *hostname = args.at("hostname").c_str();
   const char *service = args.at("port").c_str();
   const auto verbosity = std::stol(args.at("verbosity"));
 
+#ifndef WIN32
   // allow the interrupt the blocking accept() call with SIGINT, SIGTERM
   struct sigaction action {};
   action.sa_handler = signal_handler;
   sigaction(SIGINT, &action, nullptr);
   sigaction(SIGTERM, &action, nullptr);
+#else
+  signal(SIGINT, signal_handler);
+  signal(SIGTERM, signal_handler);
+#endif  // !WIN32
 
   SSL_library_init();
   SSL_load_error_strings();
@@ -144,7 +168,7 @@ int main(int argc, char **argv) {
     if (ssl_err != 1) {
       auto ec = last_sslerr_error_code();
       std::cerr << "ssl-ctx-set-tmp-dh() failed: " << ec.message() << std::endl;
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
 
@@ -165,7 +189,7 @@ int main(int argc, char **argv) {
       auto ec = last_sslerr_error_code();
       std::cerr << "use-privatekey-file(" << key_pem
                 << ") failed: " << ec.message() << std::endl;
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
 
@@ -176,7 +200,7 @@ int main(int argc, char **argv) {
       auto ec = last_sslerr_error_code();
       std::cerr << "use-certificate-file(" << cert_pem
                 << ") failed: " << ec.message() << std::endl;
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
 
@@ -192,7 +216,7 @@ int main(int argc, char **argv) {
       std::cerr << "set-session-id-context() failed: " << ec.message()
                 << std::endl;
 
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
 
@@ -203,7 +227,7 @@ int main(int argc, char **argv) {
       // docs don't say that an error-code is added to the error-queue.
       std::cerr << "set-max-early-data() failed" << std::endl;
 
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
 
@@ -219,24 +243,28 @@ int main(int argc, char **argv) {
   auto ai = address_info(hostname, service, &hints, ec);
   if (ec) {
     std::cerr << ec.message() << std::endl;
-    return EXIT_FAILURE;
+    return cleanup(EXIT_FAILURE);
   }
-
+  auto ri = address_info(hostname, service, &hints, ec);
+  if (ec) {
+    std::cerr << ec.message() << std::endl;
+    return cleanup(EXIT_FAILURE);
+  }
   FileDescriptor sock;
 
   sock.assign(socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol));
   if (!sock.is_open()) {
     std::cerr << last_error_code().message() << std::endl;
-    return EXIT_FAILURE;
+    return cleanup(EXIT_FAILURE);
   }
 
   if (0 != bind(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
     std::cerr << __LINE__ << ": " << last_error_code().message() << std::endl;
-    return EXIT_FAILURE;
+    return cleanup(EXIT_FAILURE);
   }
   if (0 != listen(sock.native_handle(), 32)) {
     std::cerr << __LINE__ << ": " << last_error_code().message() << std::endl;
-    return EXIT_FAILURE;
+    return cleanup(EXIT_FAILURE);
   }
 
   set_tcp_fast_open_server(sock.native_handle(), 1, ec);
@@ -245,25 +273,25 @@ int main(int argc, char **argv) {
               << std::endl;
     // may fail if not enabled by the system.
     if (ec != make_error_code(std::errc::operation_not_permitted)) {
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
   }
 
   set_reuse_address(sock.native_handle(), 1, ec);
   if (ec) {
     std::cerr << ec.message() << std::endl;
-    return EXIT_FAILURE;
+    return cleanup(EXIT_FAILURE);
   }
 
   // socket is setup, ready to accept connections.
   do {
     FileDescriptor client_sock;
-
-    client_sock.assign(accept(sock.native_handle(), nullptr, nullptr));
+    client_sock.assign(
+        accept(sock.native_handle(), (struct sockaddr *)nullptr, nullptr));
 
     if (!client_sock.is_open()) {
       std::cerr << last_error_code().message() << std::endl;
-      return EXIT_FAILURE;
+      return cleanup(EXIT_FAILURE);
     }
     if (verbosity > 1) {
       std::cout << "s <- c: // new connection" << std::endl;
@@ -399,5 +427,5 @@ int main(int argc, char **argv) {
     }
   } while (!want_shutdown);
 
-  return 0;
+  return cleanup(EXIT_SUCCESS);
 }

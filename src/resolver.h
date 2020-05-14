@@ -1,7 +1,12 @@
 #ifndef RESOLVER_INCLUDED
 #define RESOLVER_INCLUDED
 
+#ifndef WIN32
 #include <netdb.h>       // addrinfo
+#else
+#include <winsock2.h>
+#endif
+
 #include <memory>        // unique_ptr
 #include <system_error>  // error_code
 
