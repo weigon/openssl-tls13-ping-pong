@@ -347,9 +347,9 @@ connect(client_sock, addr, addr_len);
 send(client_sock, data, data_len);
 ```
 
-#### use sendto() to connect with data
+#### sys-call == connect-with-data
 
-On Linux `sendto()` can be used to established a connection and send data
+On Linux `sendto()` can establish a connection and send data
 in the first packet by setting the `MSG_FASTOPEN` flag:
 
 ```c++
@@ -358,40 +358,57 @@ sendto(sock, data, datalen, MSG_FASTOPEN, addr, addrlen);
 
 It replaces the `connect()` + `send()`.
 
-#### use a new API to connect with data
+On Windows it can be done by `ConnectEx()`, on MacOSX `connectx()`.
 
-- Windows has `ConnectEx()`
-- MacOSX has `connectx()`
+To integrate them with openssl:
+
+- build a new BIO which calls the special sys-call at the
+  first `BIO_write()`
+- forwards all other calls to the underlying socket-BIO.
+
+```c++
+
+addrinfo *ai = ...;
+
+BIO_set_data(bio_socket_forwarder, ai);
+
+auto m = BIO_meth_new(..);
+BIO_meth_set_write(m, [](BIO *b, const char *buf, int len)) -> int {
+  if (BIO_next(b) == nullptr) {
+    return 0;
+  }
+
+  if (auto *ai = reinterpret_cast<addrinfo *>(BIO_get_data(b))) {
+    int res = -1;
+#if defined(__linux__) && defined(MSG_FASTOPEN)
+    res = ::sendto(BIO_get_fd(b, nullptr), buf, len, MSG_FASTOPEN,
+                   ai->ai_addr, ai->ai_addrlen);
+#elif defined(_WIN32)
+   // ... ConnectEx()
+#else
+    errno = EOPNOTSUPP;
+#endif
+
+    // unset the data to only call it in the first round.
+    BIO_set_data(b, nullptr);
+
+    return res;
+  }
+
+  auto res = BIO_write(BIO_next(b), buf, len);
+
+  return res;
+};
+// ... other methods
+
+auto *bio_s = BIO_new(BIO_s_socket());
+auto *bio_m = BIO_new(m);
+BIO_push(bio_m, bio_s);
+BIO_set_fd(bio_m, fd, BIO_NOCLOSE);
+
+```
 
 # Examples
-
-## Build Requirements
-
-- cmake 3.4 or later
-- C++14 capable compiler
-- Openssl 1.1.1
-- Operating Systems
-  - Linux 4.11 or later
-  - FreeBSD 12 or later
-  - MacOSX 10.11 or later
-
-## building
-
-    $ cmake
-    $ make
-
-*Note*: On MacOS X you need to pass `-DOPENSSL_ROOT_DIR=<path-to-openssl-binary-directory>`
-to `cmake` as linking against the systems openssl will fail.
-
-## running
-
-1. Start server in one terminal
-
-       $ ./src/tls13_ping_pong_server --port=3308
-
-2. run the client in another terminal
-
-       $ ./src/tls13_ping_pong_client --port=3308
 
 ## Tracing packets
 

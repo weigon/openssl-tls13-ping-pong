@@ -76,14 +76,30 @@ over a network with a round-trip-time (RTT) of
   - Linux 4.11 or later
   - FreeBSD 12 or later
   - MacOSX 10.11 or later
+  - Windows 10
 
 ## building
 
-    $ cmake
-    $ make
+Configure the build:
 
-*Note*: On MacOS X you need to pass `-DOPENSSL_ROOT_DIR=<path-to-openssl-binary-directory>`
-to `cmake` as linking against the systems openssl will fail.
+    $ cmake
+
+Run the build with:
+
+    $ cmake --build .
+
+Note: `cmake --build .` runs the build. On Unix it will run "make",
+on windows it will run "msbuild".
+
+### MacOS X/Windows
+
+On MacOS X and Windows you need to pass `-DOPENSSL_ROOT_DIR=`
+to `cmake`:
+
+    $ cmake -DOPENSSL_ROOT_DIR=<path-to-openssl-binary-directory>
+    $ cmake --build .
+
+Note: On MacOS X it is needed as linking against the systems openssl will fail.
 
 ## running
 
