@@ -78,6 +78,12 @@ static void signal_handler(int sig) { want_shutdown = 1; }
 
 int main(int argc, char **argv) {
 #if defined(_WIN32)
+  WSADATA wsadata;
+  if (auto err = WSAStartup(MAKEWORD(2, 2), &wsadata)) {
+    std::cerr << "WSAStartup() failed with " << err << std::endl;
+
+    return EXIT_FAILURE;
+  }
 #else
   // don't signal SIGPIPE on write() to a closed connection
   signal(SIGPIPE, SIG_IGN);
