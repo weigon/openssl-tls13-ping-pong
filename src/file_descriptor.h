@@ -32,13 +32,10 @@
 #endif
 #include <utility>  // exchange
 
+#include "sock_opt.h"
+
 class FileDescriptor {
  public:
-#ifndef WIN32
-  using native_handle_type = int;
-#else
-  using native_handle_type = SOCKET;
-#endif
   const native_handle_type kInvalidHandle = -1;
 
   FileDescriptor() = default;

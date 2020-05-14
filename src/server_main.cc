@@ -40,10 +40,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 #else
+/* clang-format off */
 #include <signal.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+/* clang-format on */
 #endif
 
 #include <openssl/bio.h>
@@ -84,7 +86,7 @@ int main(int argc, char **argv) {
   // don't signal SIGPIPE on write() to a closed connection
   signal(SIGPIPE, SIG_IGN);
 #else
-  #define SHUT_WR SD_SEND
+#define SHUT_WR SD_SEND
   WSADATA wsaData;
   // Initialize Winsock
   auto iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -92,7 +94,6 @@ int main(int argc, char **argv) {
     printf("WSAStartup failed with error: %d\n", iResult);
     return EXIT_FAILURE;
   }
-  SOCKET ConnectSocket = INVALID_SOCKET;
 #endif
   std::map<std::string, std::string> args{
       {"hostname", "127.0.0.1"}, {"port", "3308"},     {"data", "PONG"},
@@ -220,7 +221,7 @@ int main(int argc, char **argv) {
     }
   }
 
-  // announce that early data will be accepted accepted
+  // announce that early data will be accepted
   {
     auto ssl_err = SSL_CTX_set_max_early_data(ssl_ctx, 32);
     if (ssl_err != 1) {
@@ -241,6 +242,7 @@ int main(int argc, char **argv) {
   hints.ai_flags = AI_PASSIVE;
 
   auto ai = address_info(hostname, service, &hints, ec);
+
   if (ec) {
     std::cerr << ec.message() << std::endl;
     return cleanup(EXIT_FAILURE);
@@ -266,7 +268,7 @@ int main(int argc, char **argv) {
     std::cerr << __LINE__ << ": " << last_error_code().message() << std::endl;
     return cleanup(EXIT_FAILURE);
   }
-
+  // RFC#7413 mandates to set the flag on Server side.
   set_tcp_fast_open_server(sock.native_handle(), 1, ec);
   if (ec) {
     std::cerr << __LINE__ << ": enable TCP FastOpen(): " << ec.message()

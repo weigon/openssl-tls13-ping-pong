@@ -41,14 +41,18 @@
 #include <sys/socket.h>  // SOL_SOCKET
 #include <unistd.h>      // close
 #else
+/* clang-format off */
 #include <signal.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <MSWSock.h>
+/* clang-format on */
 #endif
 
 #include <openssl/err.h>  // ERR_get_error
 #include <openssl/ssl.h>  // SSL_CTX_new
+#include <openssl/bio.h>
 
 #if OPENSSL_VERSION_NUMBER < 0x1010100fL
 #error at least openssl 1.1.1 is required.
@@ -87,6 +91,55 @@ static int new_session_cb(SSL *s, SSL_SESSION *sess) {
   return 1;
 }
 
+namespace {
+
+template <class T>
+struct Deleter;
+
+template <>
+struct Deleter<SSL_CTX> {
+  void operator()(SSL_CTX *p) const { SSL_CTX_free(p); }
+};
+template <>
+struct Deleter<SSL> {
+  void operator()(SSL *p) const { SSL_free(p); }
+};
+template <>
+struct Deleter<BIO> {
+  void operator()(BIO *p) const { BIO_free(p); }
+};
+template <>
+struct Deleter<BIO_METHOD> {
+  void operator()(BIO_METHOD *p) const { BIO_meth_free(p); }
+};
+
+#ifdef WIN32
+bool is_first_time = true;
+sockaddr name;
+LPFN_CONNECTEX connect_ex_ptr = nullptr;
+
+static int ping_write(BIO *bio, const char *buf, int len) {
+  int ret = 0;
+  auto desc = BIO_get_fd(bio, nullptr);
+  WSASetLastError(0);
+  if (is_first_time) {
+    is_first_time = false;
+    LPOVERLAPPED overlapped;
+    memset(&overlapped, 0, sizeof(overlapped));
+    if (connect_ex_ptr(desc, &name, sizeof name, (PVOID *)buf, len,
+                       (LPDWORD)&ret, overlapped) == FALSE)
+      return SOCKET_ERROR;
+  } else {
+    ret = send(desc, buf, len, MSG_OOB);
+    if (ret == SOCKET_ERROR) {
+      return SOCKET_ERROR;
+    }
+  }
+  return ret;
+}
+#endif
+}  // namespace
+
 /**
  * run one connection.
  *
@@ -99,9 +152,10 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
                        const char *service, bool with_fast_open,
                        bool with_session_resumption, bool early_data,
                        const std::string &data, int verbosity) {
-  auto ssl_mem =
-      std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx), &SSL_free);
+  auto ssl_mem = std::unique_ptr<SSL, Deleter<SSL>>(SSL_new(ssl_ctx));
   SSL *ssl = ssl_mem.get();
+  std::unique_ptr<BIO_METHOD, Deleter<BIO_METHOD>> bio_method_mem;
+  std::unique_ptr<BIO, Deleter<BIO>> bio_mem;
 
   if (verbosity > 1) {
     std::cout << "// TLS "
@@ -117,6 +171,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
   hints.ai_socktype = SOCK_STREAM;
 
   auto ai = address_info(hostname, service, &hints, ec);
+  name = *(ai->ai_addr);
   if (ec) {
     return ec;
   }
@@ -156,6 +211,22 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
                       NULL, 0, NULL, NULL)) {
       return last_error_code();
     }
+#elif defined(WIN32)
+    DWORD numBytes = 0;
+    GUID guid = WSAID_CONNECTEX;
+    if (WSAIoctl(sock.native_handle(), SIO_GET_EXTENSION_FUNCTION_POINTER,
+                 (void *)&guid, sizeof(guid), (void *)&connect_ex_ptr,
+                 sizeof(connect_ex_ptr), &numBytes, NULL, NULL) == SOCKET_ERROR)
+      return last_error_code();
+
+    bio_method_mem.reset(BIO_meth_new(BIO_TYPE_SOURCE_SINK, "ping_write"));
+    BIO_METHOD *bio_method = bio_method_mem.get();
+    BIO_meth_set_write(bio_method, ping_write);
+
+    bio_mem.reset(BIO_new(bio_method));
+    BIO *bio = bio_mem.get();
+    BIO_set_fd(bio, (int)sock.native_handle(), BIO_NOCLOSE);
+    SSL_set_bio(ssl, bio, bio);
 #endif
   } else {
     if (0 != connect(sock.native_handle(), ai->ai_addr, ai->ai_addrlen)) {
@@ -178,7 +249,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
                                         transfer_buf.size(), &written);
     if (ssl_res != 1) {
       auto ec = last_ssl_error_code(ssl, ssl_res);
-
+      std::cerr << ec.message() << std::endl;
       return ec;
     } else {
       std::cerr << "c -> s: " << transfer_buf.data() << std::endl;
@@ -376,8 +447,8 @@ int main(int argc, char **argv) {
   }
 
   // build SSL context
-  auto ssl_ctx_mem = std::unique_ptr<SSL_CTX, void (*)(SSL_CTX *)>(
-      SSL_CTX_new(TLS_client_method()), &SSL_CTX_free);
+  auto ssl_ctx_mem = std::unique_ptr<SSL_CTX, Deleter<SSL_CTX>>(
+      SSL_CTX_new(TLS_client_method()));
 
   SSL_CTX *ssl_ctx = ssl_ctx_mem.get();
 
@@ -401,14 +472,6 @@ int main(int argc, char **argv) {
       ssl_ctx, SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL);
   SSL_CTX_sess_set_new_cb(ssl_ctx, new_session_cb);
 
-  {
-    const char *ssl_keylogfile = getenv("SSLKEYLOGFILE");
-    if (ssl_keylogfile) {
-      // truncate the file as later the code will append to it.
-      std::ofstream ofs(ssl_keylogfile,
-                        std::ios_base::out | std::ios_base::trunc);
-    }
-  }
   // enable the keylog to get better traces with wireshark
   SSL_CTX_set_keylog_callback(ssl_ctx, [](const SSL *ssl, const char *line) {
     const char *ssl_keylogfile = getenv("SSLKEYLOGFILE");
