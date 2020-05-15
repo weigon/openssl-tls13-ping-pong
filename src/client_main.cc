@@ -34,6 +34,7 @@
 #include <string>        // stol
 #include <system_error>  // error_code
 #include <vector>
+#include "deleter.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -70,11 +71,11 @@
 #include "resolver.h"
 #include "sock_err.h"
 #include "sock_opt.h"
+#include "ssl_deleter.h"
 #include "ssl_err.h"
 
 // remember the last session to assign it to another connection to the same host
-std::unique_ptr<SSL_SESSION, void (*)(SSL_SESSION *)> last_session(
-    nullptr, &SSL_SESSION_free);
+std::unique_ptr<SSL_SESSION, Deleter<SSL_SESSION>> last_session(nullptr);
 
 /**
  * store a session ticket in a cache.
@@ -90,21 +91,6 @@ static int new_session_cb(SSL *s, SSL_SESSION *sess) {
 
   return 1;
 }
-
-template <class T>
-class Deleter;
-
-template <>
-class Deleter<BIO> {
- public:
-  void operator()(BIO *b) { BIO_free(b); }
-};
-
-template <>
-class Deleter<BIO_METHOD> {
- public:
-  void operator()(BIO_METHOD *b) { BIO_meth_free(b); }
-};
 
 #if defined(_WIN32)
 LPFN_CONNECTEX connect_ex_ptr = nullptr;
@@ -122,8 +108,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
                        const char *service, bool with_fast_open,
                        bool with_session_resumption, bool early_data,
                        const std::string &data, int verbosity) {
-  auto ssl_mem =
-      std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx), &SSL_free);
+  auto ssl_mem = std::unique_ptr<SSL, Deleter<SSL>>(SSL_new(ssl_ctx));
   SSL *ssl = ssl_mem.get();
 
   if (verbosity > 1) {
@@ -550,14 +535,13 @@ int main(int argc, char **argv) {
   }
 
   // build SSL context
-  auto ssl_ctx_mem = std::unique_ptr<SSL_CTX, void (*)(SSL_CTX *)>(
-      SSL_CTX_new(TLS_client_method()), &SSL_CTX_free);
+  auto ssl_ctx_mem = std::unique_ptr<SSL_CTX, Deleter<SSL_CTX>>(
+      SSL_CTX_new(TLS_client_method()));
 
   SSL_CTX *ssl_ctx = ssl_ctx_mem.get();
 
   // set tmp DH keys
-  auto dh_2048_mem =
-      std::unique_ptr<DH, void (*)(DH *)>(DH_get_2048_256(), &DH_free);
+  auto dh_2048_mem = std::unique_ptr<DH, Deleter<DH>>(DH_get_2048_256());
   DH *dh_2048 = dh_2048_mem.get();
 
   SSL_CTX_set_tmp_dh(ssl_ctx, dh_2048);

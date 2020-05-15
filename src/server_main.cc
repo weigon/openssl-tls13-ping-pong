@@ -52,6 +52,7 @@
 #include "resolver.h"
 #include "sock_err.h"
 #include "sock_opt.h"
+#include "ssl_deleter.h"
 #include "ssl_err.h"
 
 // TCP FastOpen is not enabled by default on Linux.
@@ -146,13 +147,12 @@ int main(int argc, char **argv) {
   SSL_library_init();
   SSL_load_error_strings();
 
-  auto ssl_ctx_mem = std::unique_ptr<SSL_CTX, void (*)(SSL_CTX *)>(
-      SSL_CTX_new(TLS_server_method()), &SSL_CTX_free);
+  auto ssl_ctx_mem = std::unique_ptr<SSL_CTX, Deleter<SSL_CTX>>(
+      SSL_CTX_new(TLS_server_method()));
   SSL_CTX *ssl_ctx = ssl_ctx_mem.get();
 
   // set DH group to enable forward secrecy
-  auto dh_2048_mem =
-      std::unique_ptr<DH, void (*)(DH *)>(DH_get_2048_256(), &DH_free);
+  auto dh_2048_mem = std::unique_ptr<DH, Deleter<DH>>(DH_get_2048_256());
   DH *dh_2048 = dh_2048_mem.get();
 
   {
@@ -291,8 +291,7 @@ int main(int argc, char **argv) {
     }
 
     // create a SSL handle and assign it the socket-fd
-    auto ssl_mem =
-        std::unique_ptr<SSL, void (*)(SSL *)>(SSL_new(ssl_ctx), &SSL_free);
+    auto ssl_mem = std::unique_ptr<SSL, Deleter<SSL>>(SSL_new(ssl_ctx));
     SSL *ssl = ssl_mem.get();
 
     SSL_set_fd(ssl, client_sock.native_handle());

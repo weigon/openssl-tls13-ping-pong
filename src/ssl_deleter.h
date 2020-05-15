@@ -22,36 +22,47 @@
  * SPDX-License-Identifier: MIT
  */
 
-#ifndef RESOLVER_INCLUDED
-#define RESOLVER_INCLUDED
+#ifndef SSL_DELETER_INCLUDED
+#define SSL_DELETER_INCLUDED
 
-#if defined(_WIN32)
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>  // EAI_NONAME
-#else
-#include <netdb.h>  // addrinfo
-#endif
-#include <memory>        // unique_ptr
-#include <system_error>  // error_code
+#include <openssl/ssl.h>
 
 #include "deleter.h"
 
-enum class resolver_errc {
-  noname = EAI_NONAME,
+template <>
+class Deleter<SSL_CTX> {
+ public:
+  void operator()(SSL_CTX *s) { SSL_CTX_free(s); }
 };
-
-std::error_code make_error_code(resolver_errc ec);
 
 template <>
-class Deleter<addrinfo> {
+class Deleter<SSL> {
  public:
-  void operator()(addrinfo *a) { freeaddrinfo(a); }
+  void operator()(SSL *s) { SSL_free(s); }
 };
 
-std::unique_ptr<addrinfo, Deleter<addrinfo>> address_info(const char *hostname,
-                                                          const char *service,
-                                                          const addrinfo *hints,
-                                                          std::error_code &ec);
+template <>
+class Deleter<SSL_SESSION> {
+ public:
+  void operator()(SSL_SESSION *p) { SSL_SESSION_free(p); }
+};
+
+template <>
+class Deleter<DH> {
+ public:
+  void operator()(DH *p) { DH_free(p); }
+};
+
+template <>
+class Deleter<BIO> {
+ public:
+  void operator()(BIO *p) { BIO_free(p); }
+};
+
+template <>
+class Deleter<BIO_METHOD> {
+ public:
+  void operator()(BIO_METHOD *p) { BIO_meth_free(p); }
+};
 
 #endif
