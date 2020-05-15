@@ -38,7 +38,6 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include <winsock2.h>
-
 #include <MSWSock.h>  // LPCONNECTEX
 #else
 #include <netdb.h>        // getaddrinfo
@@ -254,8 +253,9 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
             errno = WSAGetLastError();
 
             if (errno == ERROR_IO_PENDING) {
+              DWORD flags = 0;
               if (0 != WSAGetOverlappedResult(sock, &overlapped, &numBytes,
-                                              TRUE, 0)) {
+                                              TRUE, &flags)) {
                 res = numBytes;
               } else {
                 errno = WSAGetLastError();
