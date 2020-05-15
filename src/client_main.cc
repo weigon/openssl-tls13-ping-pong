@@ -38,7 +38,10 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include <winsock2.h>
-#include <MSWSock.h>  // LPCONNECTEX
+#include <ws2tcpip.h>  // needed for mstcpip.h
+// ms* headers must be after the w* headers
+#include <mstcpip.h>  // INETADDR_SETANY
+#include <mswsock.h>  // LPCONNECTEX
 #else
 #include <netdb.h>        // getaddrinfo
 #include <netinet/in.h>   // sockaddr_in
@@ -232,11 +235,12 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
 #elif defined(_WIN32)
           // for ConnectEx() the socket must be bound (aka source
           // address must be set with bind())
-          struct sockaddr_in addr {};
-          addr.sin_family = AF_INET;
-          addr.sin_addr.s_addr = INADDR_ANY;
-          addr.sin_port = 0;
-          if (0 != bind(sock, (SOCKADDR *)&addr, sizeof(addr))) {
+          SOCKADDR_STORAGE addr{};
+          addr.ss_family = ai->ai_family;
+          INETADDR_SETANY(reinterpret_cast<sockaddr *>(&addr));
+
+          if (0 !=
+              bind(sock, reinterpret_cast<sockaddr *>(&addr), sizeof addr)) {
             errno = WSAGetLastError();
             return -1;
           }
@@ -260,6 +264,13 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
               } else {
                 errno = WSAGetLastError();
               }
+            }
+          }
+
+          if (res != -1) {
+            // apply previously set socket ops
+            if (0 == setsockopt(sock, SOL_SOCKET, SO_UPDATE_CONNECT_CONTEXT,
+                                NULL, 0)) {
             }
           }
 #else
