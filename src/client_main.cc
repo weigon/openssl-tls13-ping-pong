@@ -225,19 +225,42 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
 
         if (auto *ai = reinterpret_cast<addrinfo *>(BIO_get_data(b))) {
           int res = -1;
+          auto sock = BIO_get_fd(b, nullptr);
+
 #if defined(__linux__) && defined(MSG_FASTOPEN)
-          res = ::sendto(BIO_get_fd(b, nullptr), buf, len, MSG_FASTOPEN,
-                         ai->ai_addr, ai->ai_addrlen);
+          res = ::sendto(sock, buf, len, MSG_FASTOPEN, ai->ai_addr,
+                         ai->ai_addrlen);
 #elif defined(_WIN32)
-          DWORD ret;
+          // for ConnectEx() the socket must be bound (aka source
+          // address must be set with bind())
+          struct sockaddr_in addr {};
+          addr.sin_family = AF_INET;
+          addr.sin_addr.s_addr = INADDR_ANY;
+          addr.sin_port = 0;
+          if (0 != bind(sock, (SOCKADDR *)&addr, sizeof(addr))) {
+            errno = WSAGetLastError();
+            return -1;
+          }
+
+          DWORD numBytes{};
           OVERLAPPED overlapped{};
-          if (connect_ex_ptr(BIO_get_fd(b, nullptr), ai->ai_addr,
-                             ai->ai_addrlen,
+
+          if (0 !=
+              connect_ex_ptr(sock, ai->ai_addr, ai->ai_addrlen,
                              reinterpret_cast<void *>(const_cast<char *>(buf)),
-                             len, &ret, &overlapped) != 0) {
-            res = ret;
+                             len, &numBytes, &overlapped)) {
+            res = numBytes;
           } else {
             errno = WSAGetLastError();
+
+            if (errno == ERROR_IO_PENDING) {
+              if (0 != WSAGetOverlappedResult(sock, &overlapped, &numBytes,
+                                              TRUE, 0)) {
+                res = numBytes;
+              } else {
+                errno = WSAGetLastError();
+              }
+            }
           }
 #else
           errno = EOPNOTSUPP;
