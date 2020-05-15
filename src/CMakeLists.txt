@@ -22,8 +22,14 @@
 # SPDX-License-Identifier: MIT
 
 
+SET(LIBS OpenSSL::SSL OpenSSL::Crypto)
 IF(WIN32)
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DWIN32_LEAN_AND_MEAN")
+  # ensure that only the bare minimum headers are
+  # included when <windows.h> is included.
+  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DWIN32_LEAN_AND_MEAN")
+
+  LIST(APPEND LIBS ws2_32)   # winsock2
+  LIST(APPEND LIBS crypt32)  # openssl needs crypt32
 ENDIF()
 
 ADD_EXECUTABLE(tls13_ping_pong_client
@@ -32,20 +38,15 @@ ADD_EXECUTABLE(tls13_ping_pong_client
 	resolver.cc
 	ssl_err.cc
 	)
-TARGET_LINK_LIBRARIES(tls13_ping_pong_client OpenSSL::SSL OpenSSL::Crypto)
-IF(WIN32)
-  TARGET_LINK_LIBRARIES(tls13_ping_pong_client ws2_32 crypt32)
-ENDIF()
+TARGET_LINK_LIBRARIES(tls13_ping_pong_client ${LIBS})
+
 ADD_EXECUTABLE(tls13_ping_pong_server
 	server_main.cc
 	sock_opt.cc
 	resolver.cc
 	ssl_err.cc
 	)
-TARGET_LINK_LIBRARIES(tls13_ping_pong_server OpenSSL::SSL OpenSSL::Crypto)
-IF(WIN32)
-TARGET_LINK_LIBRARIES(tls13_ping_pong_server ws2_32 crypt32)
-ENDIF()
+TARGET_LINK_LIBRARIES(tls13_ping_pong_server ${LIBS})
 
 ADD_CUSTOM_COMMAND(
 	OUTPUT key.pem cert.pem
