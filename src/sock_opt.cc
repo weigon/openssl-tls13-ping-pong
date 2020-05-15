@@ -1,3 +1,4 @@
+#include "file_descriptor.h"
 #if defined(_WIN32)
 #include <windows.h>
 #include <winsock2.h>
@@ -17,7 +18,8 @@ using opt_type = const char *;
 using opt_type = void *;
 #endif
 
-void set_tcp_fast_open_server(int sock, int qlen, std::error_code &ec) {
+void set_tcp_fast_open_server(FileDescriptor::native_handle_type sock, int qlen,
+                              std::error_code &ec) {
   ec.clear();
   if (0 != setsockopt(sock, IPPROTO_TCP, TCP_FASTOPEN,
                       reinterpret_cast<opt_type>(&qlen), sizeof qlen)) {
@@ -25,7 +27,8 @@ void set_tcp_fast_open_server(int sock, int qlen, std::error_code &ec) {
   }
 }
 
-void set_tcp_fast_open_client(int sock, int on, std::error_code &ec) {
+void set_tcp_fast_open_client(FileDescriptor::native_handle_type sock, int on,
+                              std::error_code &ec) {
   ec.clear();
 
 #if defined(__FreeBSD__)
@@ -40,7 +43,8 @@ void set_tcp_fast_open_client(int sock, int on, std::error_code &ec) {
 #endif
 }
 
-void set_reuse_address(int sock, int on, std::error_code &ec) {
+void set_reuse_address(FileDescriptor::native_handle_type sock, int on,
+                       std::error_code &ec) {
   ec.clear();
   if (0 != setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
                       reinterpret_cast<opt_type>(&on), sizeof on)) {
@@ -48,7 +52,8 @@ void set_reuse_address(int sock, int on, std::error_code &ec) {
   }
 }
 
-void set_tcp_nodelay(int sock, int on, std::error_code &ec) {
+void set_tcp_nodelay(FileDescriptor::native_handle_type sock, int on,
+                     std::error_code &ec) {
   ec.clear();
   if (0 != setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
                       reinterpret_cast<opt_type>(&on), sizeof on)) {

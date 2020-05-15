@@ -212,7 +212,7 @@ std::error_code do_one(SSL_CTX *ssl_ctx, const char *hostname,
 
         if (auto *ai = reinterpret_cast<addrinfo *>(BIO_get_data(b))) {
           int res = -1;
-          auto sock = BIO_get_fd(b, nullptr);
+          FileDescriptor::native_handle_type sock = BIO_get_fd(b, nullptr);
 
 #if defined(__linux__) && defined(MSG_FASTOPEN)
           res = ::sendto(sock, buf, len, MSG_FASTOPEN, ai->ai_addr,

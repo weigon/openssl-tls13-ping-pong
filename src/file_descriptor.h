@@ -35,8 +35,13 @@
 
 class FileDescriptor {
  public:
+#if defined(_WIN32)
+  using native_handle_type = SOCKET;
+  const native_handle_type kInvalidHandle{INVALID_SOCKET};
+#else
   using native_handle_type = int;
   const native_handle_type kInvalidHandle{-1};
+#endif
 
   FileDescriptor() = default;
 
@@ -77,7 +82,7 @@ class FileDescriptor {
   ~FileDescriptor() { close(); }
 
  private:
-  int fd_{-1};
+  native_handle_type fd_{kInvalidHandle};
 };
 
 #endif
