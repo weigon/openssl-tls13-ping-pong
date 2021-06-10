@@ -1,6 +1,6 @@
 # TLS 1.3 + TCP Fast Open
 
-1. [TCP Fast Open] added support to send data in the first packet of the TLS handshake.
+1. [TCP Fast Open] added support to send data in the first packet of the TCP handshake.
 2. [TLS 1.3] added support for 0-RTT,
 allowing to send application data in the first packet of the TLS handshake.
 
